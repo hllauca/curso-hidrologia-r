@@ -1,0 +1,1360 @@
+---
+title: "Curso-Taller: Análisis Hidrológico de Cuencas con R - 2026"
+subtitle: "Clase 4: Análisis Hidrológico Avanzado"
+author: "Harold Llauca"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    theme: cosmo
+    highlight: tango
+    
+knitr:
+  opts_chunk:
+    echo: true
+    warning: false
+    message: false
+---
+
+# 📦 Preparación del entorno de trabajo
+
+Se configura el entorno en R, definiendo el directorio de trabajo y cargando los paquetes necesarios para asegurar un flujo de trabajo ordenado y reproducible.
+
+```{r setup, include=FALSE}
+# Configuración inicial del documento
+knitr::opts_chunk$set(echo = TRUE)
+
+# Cambiar esta ruta según la ubicación del proyecto en su equipo.
+# Se recomienda usar rutas relativas para mayor portabilidad.
+
+knitr::opts_knit$set(
+  root.dir = "C:/Users/hllauca/Desktop/Analisis_Hidrologico_Cuencas_R_2026"
+  )
+```
+
+```{r}
+#-----------------------------------------------------------
+# Configuración de repositorio e instalación de paquetes
+#-----------------------------------------------------------
+
+# Establecer mirror de CRAN
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Lista de paquetes necesarios
+packages <- c(
+  "zoo",                # manejo de series temporales
+  "RColorBrewer",       # paletas de colores para gráficos
+  "hydroGOF",           # métricas de desempeño hidrológico (NSE, KGE, RMSE, etc.)
+  "hydroTSM",           # análisis y visualización de series hidrológicas
+  "matrixStats",        # operaciones estadísticas eficientes sobre matrices
+  # "precintcon",         # análisis de consistencia de precipitación
+  "lubridate",          # manejo de fechas y tiempos
+  "dplyr",              # manipulación de datos
+  "ggplot2",            # elaboración de gráficos
+  "ggthemes",           # temas adicionales para ggplot2
+  "wql",                # análisis de calidad de agua y tendencias
+  "trend",              # análisis de tendencias (Mann-Kendall, etc.)
+  "SpecsVerification",  # verificación de pronósticos (skill scores)
+  "CSHShydRology",      # funciones hidrológicas especializadas (regionalización, análisis)
+  "EnvStats",           # estadística ambiental
+  "extremeStat",        # análisis de valores extremos
+  "lmomco",             # análisis de momentos-L (hidrología de extremos)
+  "nortest"             # pruebas de normalidad (Anderson-Darling, etc.)
+)
+
+# Instalar paquetes si no están instalados
+for (pkg in packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+# Cargar paquetes
+invisible(lapply(packages, function(pkg) {
+  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+}))
+
+# install.packages('remotes')
+# remotes::install_github("lucasvenez/precintcon")
+library(precintcon)
+```
+
+# 🗺 Leer datos hidroclimáticos de la cuenca
+
+En esta sección se leen las salidas del modelo hidrológico GR4J previamente calibrado. Para efectos de la caracterización hidroclimática de la cuenca, se analizarán dos variables principales: la precipitación media areal sobre la cuenca y el caudal simulado a la salida de la misma. Estas variables permiten describir el comportamiento hidrológico del sistema en términos de entradas (precipitación) y respuesta (escorrentía).
+
+Este tipo de análisis también puede extrapolarse a estaciones puntuales, utilizando datos observados de precipitación y caudal, lo que permite evaluar y caracterizar el comportamiento hidrológico a diferentes escalas dentro de la cuenca.
+
+```{r}
+#-----------------------------------------------------------
+# Leer datos hidroclimáticos de la cuenca
+#-----------------------------------------------------------
+
+# Leer salidas del modelo GR4J lumped
+Outputs <- readRDS("./Modules/Clase_3/outputs/model_outputs_lumped.rds")
+
+# Extraer variables
+time <- Outputs$DatesR
+
+# Precipitación areal de la cuenca [mm/d]
+pr <- zoo(Outputs$Precip, time)
+
+# Área de la cuenca [km2]
+area <- Outputs$Area
+
+# Caudal simulado a la salida de la cuenca [m3/s]
+qm <- zoo(Outputs$Qsim * area / 86.4, time)  # conversión de mm/d a m3/s
+```
+
+# 🌧️ Variabilidad de la precipitación
+
+En esta sección se analiza la variabilidad de la precipitación en la cuenca a diferentes escalas temporales. A partir de la serie diaria, se generan agregaciones mensuales y anuales que permiten caracterizar la estacionalidad, la variabilidad interanual y la ocurrencia de eventos húmedos y secos. Asimismo, se evalúan la climatología mensual, las anomalías de precipitación y el índice SPI, con el fin de identificar patrones hidrológicos dominantes y comprender la dinámica climática que controla el régimen de lluvias en la cuenca.
+
+```{r}
+#-----------------------------------------------------------
+# Variabilidad de la precipitación
+#-----------------------------------------------------------
+
+# Agregar precipitación diaria a escala mensual (acumulada)
+pr_mes <- hydroTSM::daily2monthly(pr, FUN = "sum")
+
+# Configuración gráfica
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.8,
+  cex.axis = 0.7,
+  tck = -0.01
+)
+
+# Crear gráfico de barras
+barplot(
+  pr_mes,
+  main = "Serie mensual de la precipitación en la cuenca",
+  ylim = c(0, 1.1 * max(pr_mes, na.rm = TRUE)),
+  xlab = "",
+  ylab = "[mm/mes]",
+  col  = "mediumpurple2",
+  border = "mediumpurple2"
+)
+
+box()
+```
+
+A continuación, se analiza la variabilidad interanual de la precipitación en la cuenca. Para ello, la serie mensual se agrega a escala anual, lo que permite identificar años secos, húmedos y posibles anomalías climáticas. Además, se incluye el valor promedio anual como referencia para facilitar la interpretación.
+
+```{r}
+#-----------------------------------------------------------
+# Variabilidad interanual de la precipitación
+#-----------------------------------------------------------
+
+# Agregar precipitación mensual a escala anual
+pr_ann <- hydroTSM::monthly2annual(pr_mes, FUN = sum)
+
+# Configuración gráfica
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.8,
+  cex.axis = 0.7,
+  tck = -0.01
+)
+
+# Crear gráfico de barras
+barplot(
+  pr_ann,
+  main = "Serie anual de precipitación en la cuenca",
+  ylim = c(0, 1.1 * max(pr_ann, na.rm = TRUE)),
+  xlab = "",
+  ylab = "[mm/año]",
+  col  = "mediumpurple2",
+  border = "mediumpurple2"
+)
+
+# Línea de promedio anual
+mean_pr <- mean(pr_ann, na.rm = TRUE)
+
+abline(h = mean_pr, col = "black", lty = 2)
+
+# Texto del promedio
+mtext(
+  side = 3,
+  line = -2,
+  adj  = 0.98,
+  paste(round(mean_pr, 0), "mm/año")
+)
+
+box()
+```
+
+En esta sección se calcula la climatología mensual de la precipitación, es decir, el promedio de la precipitación para cada mes del año a lo largo del periodo de estudio. Este análisis permite identificar el patrón estacional de lluvias en la cuenca, distinguiendo claramente los periodos húmedos y secos.
+
+```{r}
+#-----------------------------------------------------------
+# Climatología mensual de la precipitación
+#-----------------------------------------------------------
+
+# Calcular climatología mensual (promedio por mes)
+pr_clim <- hydroTSM::monthlyfunction(pr_mes, FUN = mean)
+
+# Extraer valores como vector
+pr_clim_vec <- coredata(pr_clim)
+
+# Reordenar meses (septiembre–agosto, típico en hidrología andina)
+pr_clim_ord <- pr_clim_vec[c(9:12, 1:8)]
+
+# Etiquetas de meses
+lab <- month.abb[c(9:12, 1:8)]
+
+# Configuración gráfica
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.9,
+  cex.axis = 0.7,
+  tck = -0.01
+)
+
+# Crear gráfico
+barplot(
+  coredata(pr_clim_ord),
+  names.arg = lab,
+  ylab = "[mm/mes]",
+  col  = "mediumpurple2",
+  main = "Climatología mensual de la precipitación en la cuenca",
+  ylim = c(0, 1.1 * max(pr_clim_ord, na.rm = TRUE))
+)
+
+box()
+```
+
+En esta sección se analiza la variación estacional de la precipitación en la cuenca mediante diagramas de caja agrupados por estaciones climáticas. Se consideran cuatro periodos: SON (septiembre–noviembre), DEF (diciembre–febrero), MAM (marzo–mayo) y JJA (junio–agosto). Este enfoque permite evaluar la distribución, dispersión y presencia de valores extremos de la precipitación en cada estación, facilitando la identificación de los periodos más húmedos y secos del año.
+
+```{r}
+#-----------------------------------------------------------
+# Variación estacional de la precipitación
+#-----------------------------------------------------------
+
+pr_df <- data.frame(
+  fecha = index(pr_mes),
+  pr    = coredata(pr_mes)
+)
+
+# Asignar estación
+pr_df$estacion <- dplyr::case_when(
+  format(pr_df$fecha, "%m") %in% c("12", "01", "02") ~ "DEF",
+  format(pr_df$fecha, "%m") %in% c("03", "04", "05") ~ "MAM",
+  format(pr_df$fecha, "%m") %in% c("06", "07", "08") ~ "JJA",
+  format(pr_df$fecha, "%m") %in% c("09", "10", "11") ~ "SON"
+)
+
+# Orden hidrológico deseado
+pr_df$estacion <- factor(
+  pr_df$estacion,
+  levels = c("SON", "DEF", "MAM", "JJA")
+)
+
+# Gráfico
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.9,
+  cex.axis = 0.7,
+  tck = -0.01
+)
+
+boxplot(
+  pr ~ estacion,
+  data = pr_df,
+  boxwex = 0.5,
+  medcol = "red",
+  col = "gray90",
+  medlwd = 1,
+  outpch = 16,
+  boxlty = 1,
+  whisklty = 1,
+  staplelwd = 1,
+  ylab = "[mm/mes]",
+  xlab = "",
+  main = "Variación estacional de la precipitación en la cuenca"
+)
+
+box()
+```
+
+En esta sección se analizan las anomalías anuales de la precipitación, expresadas como el porcentaje de desviación respecto al promedio multianual. Este enfoque permite identificar años con condiciones más húmedas o más secas de lo normal, facilitando la detección de eventos extremos y la variabilidad climática interanual en la cuenca. Las anomalías positivas indican años con precipitación por encima del promedio, mientras que las anomalías negativas representan déficits de lluvia.
+
+```{r}
+#-----------------------------------------------------------
+# Anomalías anuales de la precipitación
+#-----------------------------------------------------------
+
+# Agregar precipitación mensual a escala anual
+pr_ann <- hydroTSM::monthly2annual(pr_mes, FUN = sum)
+
+# Promedio anual
+mean_pr <- mean(pr_ann, na.rm = TRUE)
+
+# Anomalías (%)
+anom_ann <- 100 * (pr_ann - mean_pr) / mean_pr
+
+# Data frame
+df <- data.frame(
+  Year = as.numeric(format(index(pr_ann), "%Y")),
+  Anom = as.numeric(anom_ann)
+)
+
+# Colores según signo
+cols <- ifelse(df$Anom >= 0, "red", "blue")
+
+# Configuración gráfica
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.9,
+  cex.axis = 0.8,
+  tck = -0.01
+)
+
+# Gráfico de barras
+barplot(
+  df$Anom,
+  names.arg = df$Year,
+  col = cols,
+  border = NA,
+  xlab = "Año",
+  ylab = "Anomalía [%]",
+  main = "Anomalía anual de la precipitación en la cuenca"
+)
+
+# Línea base
+abline(h = 0, lwd = 0.8)
+
+box()
+```
+
+En esta sección se calcula el índice SPI-6 a partir de la precipitación mensual de la cuenca. El SPI-6 representa anomalías de precipitación acumulada en ventanas de seis meses, por lo que permite evaluar condiciones húmedas o secas a escala estacional. En este caso, se analiza el SPI-6 asociado al mes de abril, que resume el acumulado aproximado del periodo noviembre–abril, representativo de la temporada húmeda en gran parte de los Andes peruanos.
+
+```{r}
+#-----------------------------------------------------------
+# Cálculo del SPI-6 asociado al mes de abril
+#-----------------------------------------------------------
+
+# Preparar datos mensuales en el formato requerido por precintcon
+df <- data.frame(
+  year          = lubridate::year(index(pr_mes)),
+  month         = lubridate::month(index(pr_mes)),
+  precipitation = as.numeric(coredata(pr_mes))
+)
+
+# Calcular SPI-6 usando distribución Gamma
+spi_vals <- precintcon::spi(
+  precintcon::as.precintcon.monthly(df),
+  period = 6,
+  distribution = "Gamma"
+)[, 3]
+
+# Asociar los valores SPI-6 con las fechas correspondientes
+df_spi <- df[6:nrow(df), ]
+df_spi$SPI <- spi_vals
+
+# Seleccionar solo abril de cada año
+df_spi_abril <- df_spi %>%
+  dplyr::filter(month == 4) %>%
+  dplyr::mutate(
+    Date = as.Date(paste(year, month, "01", sep = "-")),
+    color_cat = dplyr::if_else(SPI >= 0, "húmedo", "seco")
+  )
+
+# Crear gráfico
+ggplot(df_spi_abril, aes(x = Date, y = SPI, fill = color_cat)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c(
+    "seco"   = "red",
+    "húmedo" = "blue"
+  )) +
+  geom_hline(yintercept = 0, color = "black", linewidth = 0.4) +
+  geom_hline(
+    yintercept = c(-1, -1.5, -2),
+    linetype = "dashed",
+    color = "red",
+    linewidth = 0.3
+  ) +
+  geom_hline(
+    yintercept = c(1, 1.5, 2),
+    linetype = "dashed",
+    color = "blue",
+    linewidth = 0.3
+  ) +
+  labs(
+    title = "SPI-6 asociado a abril (acumulado noviembre–abril)",
+    x = "Año",
+    y = "SPI-6"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+## 🚤 Variabilidad del caudal
+
+En esta sección se analiza la variabilidad del caudal en la cuenca a diferentes escalas temporales. A partir de la serie diaria simulada, se generan agregaciones mensuales y anuales que permiten caracterizar la estacionalidad, la variabilidad interanual y la ocurrencia de eventos extremos. Asimismo, se evalúan las curvas de persistencia y las anomalías de caudal, con el fin de comprender la respuesta hidrológica de la cuenca frente a la variabilidad climática. Este análisis permite identificar periodos de mayor y menor disponibilidad hídrica, así como la dinámica temporal del flujo en el sistema.
+
+El análisis del caudal a escala mensual permite observar la respuesta hidrológica de la cuenca frente a la variabilidad climática, evidenciando desfases temporales entre la precipitación y la generación de escorrentía.
+
+```{r}
+#-----------------------------------------------------------
+# Variabilidad mensual del caudal
+#-----------------------------------------------------------
+
+# Agregar caudal diario a escala mensual (promedio)
+qm_mes <- hydroTSM::daily2monthly(qm, FUN = "mean")  # usar "sum" si está en mm/d
+
+# Configuración gráfica
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.8,
+  cex.axis = 0.7,
+  tck = -0.01
+)
+
+# Crear gráfico
+plot(
+  qm_mes,
+  main = "Serie mensual del caudal a la salida de la cuenca",
+  xlab = "",
+  ylab = expression('[m'^3~'/s]'),
+  type = "o",
+  pch  = 16,
+  cex  = 0.7,
+  col  = "deepskyblue4"
+)
+
+box()
+```
+
+En esta sección se analiza la variabilidad interanual del caudal en la cuenca. Para ello, la serie mensual de caudales se agrega a escala anual mediante promedios, lo que permite identificar años con altos y bajos caudales, así como evaluar la respuesta hidrológica frente a la variabilidad climática. Se incluye además el caudal medio anual como referencia.
+
+```{r}
+#-----------------------------------------------------------
+# Variabilidad interanual del caudal
+#-----------------------------------------------------------
+
+# Agregar caudal mensual a escala anual (promedio)
+qm_ann <- hydroTSM::monthly2annual(qm_mes, FUN = mean)
+
+# Promedio anual
+mean_q <- mean(qm_ann, na.rm = TRUE)
+
+# Configuración gráfica
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.8,
+  cex.axis = 0.7,
+  tck = -0.01
+)
+
+# Crear gráfico
+plot(
+  qm_ann,
+  main = "Serie anual de caudales a la salida de la cuenca",
+  xlab = "",
+  ylab = expression('[m'^3~'/s]'),
+  type = "o",
+  pch  = 16,
+  cex  = 1.5,
+  col  = "deepskyblue4"
+)
+
+# Línea de promedio
+abline(h = mean_q, col = "black", lty = 2)
+
+# Texto del promedio
+mtext(
+  side = 3,
+  line = -2,
+  adj  = 0.98,
+  paste(round(mean_q, 0), "m³/s")
+)
+
+box()
+```
+
+En esta sección se analiza la variación estacional del caudal mediante curvas de persistencia mensual. Para cada mes se calculan distintos percentiles de caudal, lo que permite identificar el rango típico de variación entre condiciones húmedas, medias y secas. Este análisis es útil para caracterizar la disponibilidad hídrica mensual y reconocer los meses con mayor o menor persistencia de caudales.
+
+```{r}
+#-----------------------------------------------------------
+# Variación estacional del caudal mediante persistencias
+#-----------------------------------------------------------
+
+# Crear matriz de caudales mensuales reordenada al año hidrológico
+qm_sort <- matrix(coredata(qm_mes), ncol = 12, byrow = TRUE)[, c(9:12, 1:8)]
+
+# Calcular persistencias mensuales
+qm_p10 <- matrixStats::colQuantiles(qm_sort, probs = 0.90, na.rm = TRUE)
+qm_p30 <- matrixStats::colQuantiles(qm_sort, probs = 0.70, na.rm = TRUE)
+qm_p50 <- matrixStats::colQuantiles(qm_sort, probs = 0.50, na.rm = TRUE)
+qm_p70 <- matrixStats::colQuantiles(qm_sort, probs = 0.30, na.rm = TRUE)
+qm_p90 <- matrixStats::colQuantiles(qm_sort, probs = 0.10, na.rm = TRUE)
+
+# Definir colores y etiquetas de meses
+col <- rev(RColorBrewer::brewer.pal(6, "Blues"))
+lab <- c("Sep", "Oct", "Nov", "Dic", "Ene", "Feb",
+         "Mar", "Abr", "May", "Jun", "Jul", "Ago")
+
+# Configuración gráfica
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.9,
+  cex.axis = 0.7,
+  tck = -0.01
+)
+
+# Crear gráfico base
+plot(
+  qm_p10,
+  type = "o",
+  col = col[1],
+  lwd = 1.5,
+  cex = 1,
+  pch = 16,
+  xaxt = "n",
+  xlab = "",
+  ylab = expression("Caudal [m"^3~"/s]"),
+  main = "Curva de variación estacional del caudal mensual"
+)
+
+# Agregar curvas de persistencia
+lines(qm_p30, type = "o", col = col[2], lwd = 1.5, cex = 1.5, pch = 16)
+lines(qm_p50, type = "o", col = col[3], lwd = 1.5, cex = 1.5, pch = 16)
+lines(qm_p70, type = "o", col = col[4], lwd = 1.5, cex = 1.5, pch = 16)
+lines(qm_p90, type = "o", col = col[5], lwd = 1.5, cex = 1.5, pch = 16)
+
+# Agregar eje X y leyenda
+axis(1, at = 1:12, labels = lab)
+
+legend(
+  "topright",
+  legend = paste("Persistencia", seq(10, 90, 20)),
+  lty = 1,
+  col = col[1:5],
+  pch = 16,
+  cex = 1,
+  bty = "n"
+)
+
+box()
+```
+
+En esta sección se analizan las anomalías anuales del caudal, expresadas como porcentaje de desviación respecto al caudal medio multianual. Este análisis permite identificar años con caudales superiores o inferiores a las condiciones promedio, facilitando la interpretación de la variabilidad hidrológica interanual.
+
+```{r}
+#-----------------------------------------------------------
+# Anomalías anuales del caudal
+#-----------------------------------------------------------
+
+# Agregar caudal mensual a escala anual
+qm_ann <- hydroTSM::monthly2annual(qm_mes, FUN = mean)
+
+# Calcular caudal medio multianual
+mean_q <- mean(qm_ann, na.rm = TRUE)
+
+# Calcular anomalías anuales [%]
+anom_qm_ann <- 100 * (qm_ann - mean_q) / mean_q
+
+# Crear data frame para graficar
+df_qanom <- data.frame(
+  Year = as.numeric(format(index(qm_ann), "%Y")),
+  Anom = as.numeric(anom_qm_ann)
+)
+
+# Definir colores según signo de la anomalía
+cols <- ifelse(df_qanom$Anom >= 0, "red", "blue")
+
+# Configuración gráfica
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.8,
+  cex.axis = 0.7,
+  tck = -0.01
+)
+
+# Crear gráfico de barras
+barplot(
+  df_qanom$Anom,
+  names.arg = df_qanom$Year,
+  col = cols,
+  border = NA,
+  xlab = "Año",
+  ylab = "Anomalía [%]",
+  main = "Anomalía anual del caudal"
+)
+
+# Línea de referencia
+abline(h = 0, lwd = 1)
+
+box()
+```
+
+En esta sección se construye la curva de duración de caudales (Flow Duration Curve, FDC), la cual muestra la relación entre la magnitud del caudal y la frecuencia con la que es igualado o excedido. Esta herramienta permite caracterizar el régimen hidrológico de la cuenca, identificando caudales altos, medios y bajos, así como la variabilidad del sistema.
+
+```{r}
+#-----------------------------------------------------------
+# Curva de duración de caudales (FDC)
+#-----------------------------------------------------------
+
+# Extraer caudal diario en m3/s
+q_daily <- coredata(qm)
+
+# Remover valores NA
+q_daily <- q_daily[!is.na(q_daily)]
+
+# Ordenar caudales de mayor a menor
+q_sorted <- sort(q_daily, decreasing = TRUE)
+
+# Calcular probabilidad de excedencia (%)
+n <- length(q_sorted)
+exceed_prob <- 100 * (1:n) / (n + 1)
+
+#-----------------------------------------------------------
+# Gráfico
+#-----------------------------------------------------------
+
+par(
+  mar = c(3, 3, 3, 1),
+  mgp = c(1.5, 0.3, 0),
+  cex = 0.9,
+  cex.axis = 0.8,
+  tck = -0.01
+)
+
+plot(
+  exceed_prob,
+  q_sorted,
+  type = "l",
+  lwd = 2,
+  col = "deepskyblue4",
+  log = "y",  # escala logarítmica en caudal (recomendado)
+  xlab = "Probabilidad de excedencia [%]",
+  ylab = expression("Caudal [m"^3~"/s]"),
+  main = "Curva de duración de caudales diarios"
+)
+
+grid(col = "gray80")
+box()
+```
+
+# 📈 Análisis de tendencia en extremos anuales
+
+En esta sección se evalúa la presencia de tendencias en la precipitación extrema anual mediante el test no paramétrico de Mann-Kendall. Este método permite identificar si existe una tendencia significativa en la serie temporal, sin asumir una distribución específica de los datos. Además, se estima la pendiente de Sen, que cuantifica la magnitud del cambio a lo largo del tiempo.
+
+## Tendencia en la precipitación máxima anual
+
+```{r}
+#-----------------------------------------------------------
+# Tendencia en la precipitación máxima anual
+#-----------------------------------------------------------
+
+# Extraer máximos anuales de precipitación
+amax <- CSHShydRology::ch_rfa_extractamax(pr ~ time)
+
+pr_max <- amax$pr
+years  <- as.numeric(format(amax$time, "%Y"))
+
+# Remover valores NA
+valid  <- !is.na(pr_max)
+pr_max <- pr_max[valid]
+years  <- years[valid]
+
+#-----------------------------------------------------------
+# Test de Mann-Kendall
+#-----------------------------------------------------------
+mk_test <- mannKen(pr_max)
+
+# Extraer p-valor y pendiente de Sen
+pval <- round(mk_test$p.value, 3)
+psen <- round(mk_test$sen.slope, 3)
+
+# Mostrar resultados
+print(pval)
+print(psen)
+
+#-----------------------------------------------------------
+# Evaluación de la hipótesis
+#-----------------------------------------------------------
+
+if (pval < 0.05) {
+  cat("✅ Se rechaza la hipótesis nula: existe una tendencia significativa.\n")
+  cat("Pendiente de Sen =", psen, ", p-valor =", pval, "\n")
+} else {
+  cat("🟡 No se rechaza la hipótesis nula: no hay evidencia de tendencia significativa.\n")
+  cat("Pendiente de Sen =", psen, ", p-valor =", pval, "\n")
+}
+```
+
+```{r}
+#-----------------------------------------------------------
+# Tendencia en la precipitación máxima anual
+#-----------------------------------------------------------
+
+par(
+  mfrow = c(1, 1),
+  mar   = c(4, 4, 2, 0.5),
+  oma   = c(0, 0, 0, 0),
+  mgp   = c(2, 0.25, 0),
+  cex.axis = 0.9,
+  cex = 0.9,
+  tck = -0.01
+)
+
+# Gráfico base
+plot(
+  years, pr_max,
+  type = "o",
+  pch  = 16,
+  cex  = 0.9,
+  col  = "dodgerblue",
+  xlab = "Año",
+  ylab = "Precipitación máxima anual [mm]",
+  main = "Serie de precipitación máxima anual (1981–2020)"
+)
+
+# Línea de tendencia (regresión lineal)
+trend_lm <- lm(pr_max ~ years)
+lines(
+  years,
+  predict(trend_lm),
+  col = "red",
+  lty = 2,
+  lwd = 1.5
+)
+
+# Mostrar pendiente de Sen
+mtext(
+  bquote("Sen =" ~ .(10*psen) ~ "mm/dec"),
+  side = 3,
+  line = -1.2,
+  adj  = 0.02
+)
+
+# Mostrar p-valor
+mtext(
+  bquote("p-valor =" ~ .(pval)),
+  side = 3,
+  line = -2.4,
+  adj  = 0.02
+)
+
+box()
+```
+
+En caso de identificarse una tendencia significativa, se puede remover la tendencia de la serie para analizar la variabilidad interanual sin el efecto del cambio sistemático en el tiempo. Este paso permite comparar la serie original con la serie sin tendencia y facilita la interpretación de la variabilidad interna del sistema. No obstante, la eliminación de la tendencia implica asumir una condición de estacionariedad artificial, por lo que debe utilizarse con fines principalmente exploratorios.
+
+En contextos donde la tendencia es relevante desde el punto de vista físico o climático, es más apropiado aplicar enfoques de análisis no estacionario, en los cuales los parámetros de la distribución de extremos varían en el tiempo o en función de covariables climáticas. Alternativamente, puede optarse por analizar periodos homogéneos o recientes que representen mejor las condiciones actuales del sistema hidrológico.
+
+```{r}
+#-----------------------------------------------------------
+# Remover tendencia de la precipitación máxima anual
+#-----------------------------------------------------------
+
+# Remover tendencia de la serie
+pr_max_det <- SpecsVerification::Detrend(
+  pr_max,
+  demean = FALSE
+)
+
+# Configuración gráfica
+par(
+  mfrow = c(1, 1),
+  mar = c(4, 4, 2, 0.5),
+  oma = c(0, 0, 0, 0),
+  mgp = c(2, 0.25, 0),
+  cex.axis = 0.9,
+  cex = 0.9,
+  tck = -0.01
+)
+
+# Graficar serie original
+plot(
+  years,
+  pr_max,
+  type = "o",
+  pch = 16,
+  cex = 1,
+  col = "dodgerblue",
+  xlab = "Año",
+  ylab = "Precipitación máxima anual [mm]",
+  main = "Serie de precipitación máxima anual (1981–2020)"
+)
+
+# Agregar serie sin tendencia
+lines(
+  years,
+  pr_max_det,
+  col = "red",
+  lwd = 1.5
+)
+
+# Agregar leyenda
+legend(
+  "topleft",
+  legend = c("Original", "Sin tendencia"),
+  col = c("dodgerblue", "red"),
+  lty = 1,
+  pch = c(16, NA),
+  bty = "n"
+)
+
+box()
+```
+
+En esta sección se evalúa la presencia de cambios abruptos en la serie de máximos anuales mediante el test de Pettitt. A diferencia del análisis de tendencia, que permite identificar cambios graduales en el tiempo, este enfoque busca detectar posibles cambios de régimen o “saltos” en la serie, es decir, modificaciones repentinas en el comportamiento hidrológico. Este tipo de cambios puede estar asociado a variabilidad climática de gran escala, como eventos intensos de El Niño–Southern Oscillation, o a alteraciones en las condiciones de la cuenca.
+
+La identificación de un cambio significativo implica que la serie no es estrictamente estacionaria, lo cual tiene implicancias directas en el análisis de extremos y en la estimación de caudales de diseño. Por ello, este análisis complementa la evaluación de tendencias y permite una mejor interpretación del comportamiento hidrológico en el tiempo.
+
+```{r}
+#-----------------------------------------------------------
+# Detección de cambio (Pettitt) en precipitación máxima anual
+#-----------------------------------------------------------
+
+# Aplicar test de Pettitt
+pettitt_pr <- trend::pettitt.test(pr_max)
+
+# Posición del cambio (índice)
+cp <- pettitt_pr$estimate
+
+# Año de cambio
+year_cp <- years[cp]
+
+# Mostrar resultado
+print(pettitt_pr)
+
+#-----------------------------------------------------------
+# Data frame para graficar
+#-----------------------------------------------------------
+
+df_pettitt <- data.frame(
+  year  = years,
+  valor = pr_max
+)
+
+alpha <- 0.05
+
+if (pettitt_pr$p.value < alpha) {
+  cat("✅ Existe un cambio significativo en el año:", year_cp, "\n")
+} else {
+  cat("🟡 No se detecta cambio significativo\n")
+}
+
+#-----------------------------------------------------------
+# Gráfico
+#-----------------------------------------------------------
+
+ggplot(df_pettitt, aes(x = year, y = valor)) +
+  geom_line(color = "gray40") +
+  geom_point(color = "dodgerblue") +
+  geom_vline(
+    xintercept = year_cp,
+    linetype = "dashed",
+    color = "red",
+    linewidth = 1
+  ) +
+  annotate(
+    "text",
+    x = year_cp,
+    y = max(df_pettitt$valor, na.rm = TRUE),
+    label = paste("Cambio:", year_cp),
+    hjust = -0.1,
+    color = "red"
+  ) +
+  labs(
+    title = "Test de Pettitt – Precipitación máxima anual",
+    x = "Año",
+    y = "Precipitación máxima [mm]"
+  ) +
+  theme_bw(base_size = 12)
+```
+
+## Tendencia en caudales máximos anuales
+
+En esta sección se evalúa la presencia de tendencias en los caudales máximos anuales mediante el test no paramétrico de Mann-Kendall. Además, se estima la pendiente de Sen, que permite cuantificar la magnitud del cambio anual en la serie de caudales extremos.
+
+```{r}
+#-----------------------------------------------------------
+# Tendencia en el caudal máximo anual
+#-----------------------------------------------------------
+
+# Extraer máximos anuales de caudal
+amax_q <- CSHShydRology::ch_rfa_extractamax(qm ~ time)
+
+# Extraer serie de caudales máximos anuales
+qm_max <- amax_q$qm
+
+# Extraer años
+years <- as.numeric(format(amax_q$time, "%Y"))
+
+# Remover valores faltantes
+valid <- !is.na(qm_max)
+qm_max <- qm_max[valid]
+years  <- years[valid]
+
+# Aplicar test de Mann-Kendall
+mk_test_q <- mannKen(qm_max)
+
+# Extraer p-valor y pendiente de Sen
+pval_q <- round(mk_test_q$p.value, 3)
+psen_q <- round(mk_test_q$sen.slope, 3)
+
+# Mostrar resultados
+print(pval_q)
+print(psen_q)
+
+# Evaluar significancia estadística
+if (pval_q < 0.05) {
+  cat("✅ Se rechaza la hipótesis nula: existe una tendencia significativa.\n")
+  cat("Pendiente de Sen =", psen_q, ", p-valor =", pval_q, "\n")
+} else {
+  cat("🟡 No se rechaza la hipótesis nula: no hay evidencia de tendencia significativa.\n")
+  cat("Pendiente de Sen =", psen_q, ", p-valor =", pval_q, "\n")
+}
+```
+
+A continuación, se presenta la serie de caudales máximos anuales junto con una línea de tendencia lineal. Además, se incluyen la pendiente de Sen y el p-valor del test de Mann-Kendall, lo que permite evaluar tanto la magnitud como la significancia estadística de la tendencia en los caudales extremos.
+
+```{r}
+#-----------------------------------------------------------
+# Tendencia en el caudal máximo anual
+#-----------------------------------------------------------
+
+par(
+  mfrow = c(1, 1),
+  mar   = c(4, 4, 2, 0.5),
+  oma   = c(0, 0, 0, 0),
+  mgp   = c(2, 0.25, 0),
+  cex.axis = 0.9,
+  cex = 0.9,
+  tck = -0.01
+)
+
+# Gráfico base
+plot(
+  years, qm_max,
+  type = "o",
+  pch  = 16,
+  cex  = 0.9,
+  col  = "dodgerblue",
+  xlab = "Año",
+  ylab = expression("Caudal máximo anual [m"^3~"/s]"),
+  main = "Serie de caudales máximos anuales (1981–2020)"
+)
+
+# Línea de tendencia (regresión lineal)
+trend_lm <- lm(qm_max ~ years)
+
+lines(
+  years,
+  predict(trend_lm),
+  col = "red",
+  lty = 2,
+  lwd = 1.5
+)
+
+# Texto con pendiente de Sen
+mtext(
+  bquote("Pendiente Sen =" ~ .(psen_q) ~ "m³/s/año"),
+  side = 3,
+  line = -1.2,
+  adj  = 0.98
+)
+
+# Texto con p-valor
+mtext(
+  bquote("p-valor =" ~ .(pval_q)),
+  side = 3,
+  line = -2.4,
+  adj  = 0.98
+)
+
+box()
+```
+
+En esta sección se evalúan posibles cambios abruptos en la serie de caudales máximos anuales mediante el test de Pettitt. Este análisis permite identificar puntos de quiebre en el comportamiento de los extremos, los cuales pueden indicar cambios en el régimen hidrológico y afectar la validez de los supuestos de estacionariedad en el análisis de frecuencia.
+
+```{r}
+#-----------------------------------------------------------
+# Detección de cambio (Pettitt) en caudal máximo anual
+#-----------------------------------------------------------
+
+# Aplicar test de Pettitt
+pettitt_q <- trend::pettitt.test(qm_max)
+
+# Posición del cambio (índice)
+cp <- pettitt_q$estimate
+
+# Año de cambio
+year_cp <- years[cp]
+
+# Mostrar resultado
+print(pettitt_q)
+
+#-----------------------------------------------------------
+# Data frame para graficar
+#-----------------------------------------------------------
+
+df_pettitt <- data.frame(
+  year  = years,
+  valor = qm_max
+)
+
+#-----------------------------------------------------------
+# Evaluación de significancia
+#-----------------------------------------------------------
+
+alpha <- 0.05
+
+if (pettitt_q$p.value < alpha) {
+  cat("✅ Existe un cambio significativo en el año:", year_cp, "\n")
+} else {
+  cat("🟡 No se detecta cambio significativo\n")
+}
+
+#-----------------------------------------------------------
+# Gráfico
+#-----------------------------------------------------------
+
+ggplot(df_pettitt, aes(x = year, y = valor)) +
+  geom_line(color = "gray40") +
+  geom_point(color = "dodgerblue") +
+  geom_vline(
+    xintercept = year_cp,
+    linetype = "dashed",
+    color = "red",
+    linewidth = 1
+  ) +
+  annotate(
+    "text",
+    x = year_cp,
+    y = max(df_pettitt$valor, na.rm = TRUE),
+    label = paste("Cambio:", year_cp),
+    hjust = -0.1,
+    color = "red"
+  ) +
+  labs(
+    title = "Test de Pettitt – Caudal máximo anual",
+    x = "Año",
+    y = expression("Caudal máximo anual [m"^3~"/s]")
+  ) +
+  theme_bw(base_size = 12)
+```
+
+# 📊 Análisis de frecuencia de extremos hidrológicos
+
+En esta sección se inicia el análisis de frecuencia de caudales, extrayendo los máximos anuales de la serie diaria de caudales simulados. Estos valores representan los eventos extremos de mayor magnitud en cada año y constituyen la base para estudios de crecidas y la estimación de caudales de diseño. Es importante señalar que, al tratarse de caudales simulados mediante un modelo hidrológico, los resultados deben interpretarse como una aproximación al comportamiento hidrológico de la cuenca, cuya confiabilidad depende de la capacidad del modelo para reproducir adecuadamente los eventos extremos. De manera análoga, el análisis de extremos para la precipitación máxima anual sigue el mismo procedimiento metodológico. Sin embargo, para aplicaciones de diseño hidrológico se recomienda utilizar la precipitación máxima en 24 horas (Pmax 24 h), ya que representa de mejor manera la intensidad real de los eventos extremos. En ausencia de datos subdiarios, la precipitación máxima diaria anual puede emplearse como aproximación, aplicando un factor de ajuste empírico para estimar la Pmax 24 h.
+
+A continuación, se visualiza la serie diaria de caudales junto con los máximos anuales identificados.
+
+```{r}
+#-----------------------------------------------------------
+# Análisis de frecuencia - extracción de máximos anuales
+#-----------------------------------------------------------
+
+# Extraer máximos anuales de caudal
+amax_q <- CSHShydRology::ch_rfa_extractamax(qm ~ time)
+
+qm_max  <- amax_q$qm
+timeMax <- amax_q$time
+
+#-----------------------------------------------------------
+# Visualización
+#-----------------------------------------------------------
+
+par(
+  mar = c(3, 3, 3, 1),
+  oma = c(0, 0, 1, 0),
+  mgp = c(1.5, 0.25, 0),
+  cex.axis = 0.9,
+  cex = 0.9,
+  tck = -0.01
+)
+
+# Serie diaria de caudal
+plot(
+  time, qm,
+  type = "l",
+  col  = "dodgerblue2",
+  lwd  = 0.6,
+  xlab = "Tiempo",
+  ylab = expression("Caudal [m"^3~"/s]"),
+  main = "Serie de caudales diarios y máximos anuales"
+)
+
+# Máximos anuales
+points(
+  timeMax, qm_max,
+  col = "red",
+  pch = 16,
+  cex = 1.2
+)
+
+# Leyenda
+legend(
+  "topright",
+  legend = c("Caudal diario", "Máximos anuales"),
+  col = c("dodgerblue2", "red"),
+  lty = c(1, NA),
+  pch = c(NA, 16),
+  bty = "n",
+  cex = 0.8
+)
+
+box()
+```
+
+```{r}
+#-----------------------------------------------------------
+# Serie de caudales máximos anuales
+#-----------------------------------------------------------
+
+par(
+  mar = c(3, 3, 3, 1),
+  oma = c(0, 0, 1, 0),
+  mgp = c(1.5, 0.25, 0),
+  cex.axis = 0.9,
+  cex = 0.9,
+  tck = -0.01
+)
+
+plot(
+  timeMax, qm_max,
+  type = "o",
+  pch  = 16,
+  cex  = 1.1,
+  lwd  = 1.5,
+  col  = "red",
+  xlab = "Año",
+  ylab = expression("Caudal máximo anual [m"^3~"/s]"),
+  main = "Serie de caudales máximos anuales (1981–2020)"
+)
+
+grid(col = "gray80")
+box()
+```
+
+En esta sección se definen los periodos de retorno de interés para el análisis de frecuencia de caudales máximos. El periodo de retorno representa el intervalo promedio en el que se espera que un evento de determinada magnitud sea igualado o excedido. Por ejemplo, un evento con periodo de retorno de 100 años tiene una probabilidad anual de ocurrencia del 1%.
+
+```{r}
+#-----------------------------------------------------------
+# Definir periodos de retorno
+#-----------------------------------------------------------
+
+periodo_retorno <- c(10, 25, 50, 75, 100, 200, 500, 1000)
+
+# Probabilidad de excedencia asociada
+prob_excedencia <- 1 / periodo_retorno
+```
+
+En esta sección se ajusta una distribución teórica de probabilidad a la serie de caudales máximos anuales. Para ello se utiliza el método de L-momentos, ampliamente aplicado en análisis de frecuencia hidrológica por su robustez frente a muestras pequeñas y valores extremos. En este caso se ajusta la distribución generalizada de valores extremos (GEV), aunque también podrían evaluarse otras distribuciones como Gumbel, Lognormal de tres parámetros o Pearson tipo III.
+
+```{r}
+#-----------------------------------------------------------
+# Ajuste de distribución de probabilidad para máximos anuales
+#-----------------------------------------------------------
+
+# Ajustar distribución teórica usando L-momentos
+# Opciones comunes:
+# gum: Gumbel
+# gev: Generalizada de Valores Extremos
+# ln3: Lognormal de 3 parámetros
+# pe3: Pearson tipo III
+fitAM <- distLextreme(
+  qm_max,
+  sel = "gev"
+)
+
+#-----------------------------------------------------------
+# Gráfico de frecuencia
+#-----------------------------------------------------------
+
+par(
+  mfrow = c(1, 1),
+  mar = c(3, 3, 2, 0.5),
+  oma = c(0, 0, 1, 0),
+  mgp = c(1.5, 0.25, 0),
+  cex.axis = 0.9,
+  cex = 0.9,
+  tck = -0.01
+)
+
+plotLextreme(
+  fitAM,
+  selection = "gev",
+  log = TRUE,
+  add = FALSE,
+  main = "Caudal máximo anual",
+  xlab = "Periodo de retorno (T)",
+  ylab = expression("Caudal [m"^3*"/s]"),
+  PPpch = c(19, NA),
+  rmse = 3
+)
+
+box()
+```
+
+A partir de la distribución ajustada, se estiman los caudales asociados a los periodos de retorno seleccionados. Estos valores, conocidos como caudales de diseño, representan la magnitud del caudal que se espera sea igualado o excedido en promedio cada cierto número de años, y son fundamentales para el diseño de obras hidráulicas y la evaluación del riesgo hidrológico.
+
+```{r}
+#-----------------------------------------------------------
+# Estimación de caudales para periodos de retorno (Q-T)
+#-----------------------------------------------------------
+
+# Ajustar distribución GEV con periodos de retorno definidos
+fitAM <- distLextreme(
+  qm_max,
+  sel = "gev",
+  RPs = periodo_retorno
+)
+
+# Extraer caudales asociados a cada periodo de retorno
+QTR <- as.numeric(fitAM$returnlev["gev", ])
+
+# Crear tabla resumen
+tabla_QT <- data.frame(
+  Periodo_retorno = periodo_retorno,
+  Caudal_m3s      = round(QTR, 2)
+)
+
+print(tabla_QT)
+```
+
+A continuación, se estiman los intervalos de confianza asociados a los caudales de diseño para cada periodo de retorno. Estos intervalos permiten cuantificar la incertidumbre en la estimación de los caudales extremos, considerando la variabilidad de la muestra y el tamaño de la serie. En este caso, se utiliza una aproximación basada en la distribución t de Student, comúnmente empleada cuando el tamaño de muestra es limitado.
+
+```{r}
+#-----------------------------------------------------------
+# Intervalos de confianza de los caudales de diseño
+#-----------------------------------------------------------
+
+# Parámetros muestrales
+s <- sd(qm_max, na.rm = TRUE)   # desviación estándar de la muestra
+n <- length(qm_max)             # tamaño de muestra
+
+# Valor crítico t (95% de confianza)
+t_crit <- qt(0.95, df = n - 1)
+
+# Variable reducida (estandarización de los cuantiles)
+Z <- (QTR - mean(QTR)) / sd(QTR)
+
+# Cálculo del intervalo de confianza
+IC <- (t_crit * s / sqrt(n)) * sqrt(1 + 0.5 * Z^2)
+
+# Límites inferior y superior
+LB <- QTR - IC
+UB <- QTR + IC
+
+# Tabla final
+tabla_IC <- data.frame(
+  Periodo_retorno = periodo_retorno,
+  Inferior = round(LB, 1),
+  Caudal   = round(QTR, 1),
+  Superior = round(UB, 1)
+)
+
+print(tabla_IC)
+```
+
+Como alternativa más robusta, se estiman los intervalos de confianza mediante bootstrap. Este procedimiento genera múltiples remuestreos de la serie de máximos anuales para cuantificar la incertidumbre asociada a los caudales de diseño estimados con la distribución GEV.
+
+```{r}
+#-----------------------------------------------------------
+# Intervalos de confianza mediante bootstrap
+#-----------------------------------------------------------
+
+# Calcular intervalos de confianza bootstrap al 95%
+IC_boot <- distLexBoot(
+  fitAM,
+  selection = "gev",
+  conf.lev  = 0.95,
+  RPs       = periodo_retorno
+)$exBootCI$gev
+
+# Extraer límites inferior y superior
+LB <- as.numeric(IC_boot[1, ])
+UB <- as.numeric(IC_boot[2, ])
+
+# Crear tabla resumen
+tabla_IC_boot <- data.frame(
+  Periodo_retorno = periodo_retorno,
+  Inferior = round(LB, 1),
+  Caudal   = round(QTR, 1),
+  Superior = round(UB, 1)
+)
+
+print(tabla_IC_boot)
+```
+
+En esta sección se evalúa la bondad de ajuste de la distribución GEV utilizada en el análisis de frecuencia. Para ello, se revisa el RMSE del ajuste y se aplican pruebas estadísticas como Kolmogorov-Smirnov y Chi-cuadrado. Estas pruebas permiten evaluar si la distribución teórica seleccionada representa adecuadamente la serie de caudales máximos anuales.
+
+```{r}
+#-----------------------------------------------------------
+# Evaluación de bondad de ajuste de la distribución GEV
+#-----------------------------------------------------------
+
+# Extraer RMSE del ajuste
+rmse_fit <- fitAM$gof["RMSE"]
+
+print(rmse_fit)
+
+# Nivel de significancia
+alpha <- 0.05
+
+#-----------------------------------------------------------
+# Test Kolmogorov-Smirnov (KS)
+#-----------------------------------------------------------
+
+# H0: la distribución GEV se ajusta adecuadamente a los datos
+# H1: la distribución GEV no se ajusta adecuadamente a los datos
+
+ks_test <- EnvStats::gofTest(
+  qm_max,
+  distribution = "gev",
+  test = "ks"
+)
+
+pvalue_ks <- ks_test$p.value
+
+if (pvalue_ks < alpha) {
+  cat("KS: Se rechaza H0. La distribución GEV no se ajusta adecuadamente.\n")
+} else {
+  cat("KS: No hay suficiente evidencia para rechazar H0. La distribución GEV es aceptable.\n")
+}
+
+#-----------------------------------------------------------
+# Test Chi-cuadrado
+#-----------------------------------------------------------
+
+# H0: la distribución GEV se ajusta adecuadamente a los datos
+# H1: la distribución GEV no se ajusta adecuadamente a los datos
+
+chisq_test <- EnvStats::gofTest(
+  qm_max,
+  distribution = "gev",
+  test = "chisq"
+)
+
+pvalue_chisq <- chisq_test$p.value
+
+if (pvalue_chisq < alpha) {
+  cat("Chi-cuadrado: Se rechaza H0. La distribución GEV no se ajusta adecuadamente.\n")
+} else {
+  cat("Chi-cuadrado: No hay suficiente evidencia para rechazar H0. La distribución GEV es aceptable.\n")
+}
+```

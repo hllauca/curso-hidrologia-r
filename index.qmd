@@ -1,0 +1,68 @@
+---
+title: ""
+page-layout: full
+toc: false
+---
+
+```{=html}
+<div class="hero">
+  <h1>Análisis Hidrológico de Cuencas con R</h1>
+  <p>Material de libre acceso desarrollado a partir de más de 5 años de docencia continua a estudiantes, profesionales e investigadores de la región.</p>
+  <span class="badge-pill">🔓 Libre y gratuito</span>
+  <span class="badge-pill">💧 Hidrología aplicada</span>
+  <span class="badge-pill">📊 R / RStudio</span>
+  <span class="badge-pill">🌎 Cuencas peruanas</span>
+</div>
+
+<div class="stat-bar">
+  <div class="stat-item"><div class="num">4</div><div class="lbl">Clases</div></div>
+  <div class="stat-item"><div class="num">8</div><div class="lbl">Tutoriales</div></div>
+  <div class="stat-item"><div class="num">+5</div><div class="lbl">Años de docencia</div></div>
+  <div class="stat-item"><div class="num">100%</div><div class="lbl">Gratuito</div></div>
+</div>
+```
+
+::: {style="max-width:860px; margin:0 auto; padding:0 1.5rem 4rem;"}
+
+```{=html}
+<div class="section-title">¿Qué aprenderás?</div>
+<div class="class-card">
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.8rem;">
+    <div style="display:flex; gap:0.7rem; align-items:flex-start;">
+      <span style="font-size:1.3rem;">📦</span>
+      <div><strong style="color:#1a3a5c;">Manejo de datos hidrológicos</strong><br><span style="font-size:0.86rem;color:#475569;">Series de tiempo, datos espaciales, productos satelitales CHIRPS y PISCO</span></div>
+    </div>
+    <div style="display:flex; gap:0.7rem; align-items:flex-start;">
+      <span style="font-size:1.3rem;">🗺️</span>
+      <div><strong style="color:#1a3a5c;">Análisis espacial de cuencas</strong><br><span style="font-size:0.86rem;color:#475569;">Procesamiento de rasters, shapefiles y DEMs con <code>terra</code> y <code>sf</code></span></div>
+    </div>
+    <div style="display:flex; gap:0.7rem; align-items:flex-start;">
+      <span style="font-size:1.3rem;">🔧</span>
+      <div><strong style="color:#1a3a5c;">Modelación hidrológica</strong><br><span style="font-size:0.86rem;color:#475569;">Calibración y validación del modelo lluvia-escorrentía GR4J con <code>airGR</code></span></div>
+    </div>
+    <div style="display:flex; gap:0.7rem; align-items:flex-start;">
+      <span style="font-size:1.3rem;">📈</span>
+      <div><strong style="color:#1a3a5c;">Análisis de extremos</strong><br><span style="font-size:0.86rem;color:#475569;">Frecuencias de caudales, caudales de diseño y análisis de sequías hidrológicas</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="section-title" style="margin-top:2.5rem;">¿A quién va dirigido?</div>
+<div class="class-card">
+  <p style="color:#475569; margin-bottom:1rem; font-size:0.92rem;">Este curso está pensado para:</p>
+  <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
+    <span class="tool-chip">🎓 Estudiantes de ingeniería</span>
+    <span class="tool-chip">🔬 Investigadores en hidrología</span>
+    <span class="tool-chip">💼 Profesionales de recursos hídricos</span>
+    <span class="tool-chip">🌱 Principiantes en R</span>
+  </div>
+  <p style="color:#475569; font-size:0.88rem; margin:0;">No se requiere experiencia previa en programación. Solo conocimientos básicos de hidrología y ganas de aprender R.</p>
+</div>
+
+<div style="text-align:center; margin-top:2.5rem; padding:2rem; background:#f0f7ff; border-radius:12px; border:1px solid #bdd5ee;">
+  <p style="color:#1a3a5c; font-size:1rem; margin-bottom:1.2rem;">¿Listo para comenzar? Las clases están organizadas en orden progresivo.</p>
+  <a href="clases.html" style="display:inline-block; background:#2e6da4; color:#fff; border-radius:8px; padding:0.75rem 2.5rem; font-size:1rem; font-weight:700; text-decoration:none; box-shadow:0 4px 12px rgba(46,109,164,0.3);">Ir a las clases →</a>
+</div>
+```
+
+:::

@@ -1,0 +1,150 @@
+/*-- scss:rules --*/
+
+/* ── Hero ── */
+.hero {
+  background: linear-gradient(135deg, #1a3a5c 0%, #2e6da4 60%, #4a9fd4 100%);
+  color: #fff;
+  padding: 5rem 2rem 4rem;
+  text-align: center;
+  margin-bottom: 3rem;
+}
+.hero h1 {
+  font-size: 2.6rem;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 0.75rem;
+}
+.hero p {
+  font-size: 1.15rem;
+  opacity: 0.88;
+  max-width: 640px;
+  margin: 0 auto 1.8rem;
+}
+.hero .badge-pill {
+  background: rgba(255,255,255,0.18);
+  border: 1px solid rgba(255,255,255,0.35);
+  color: #fff;
+  border-radius: 50px;
+  padding: 0.3rem 1rem;
+  font-size: 0.85rem;
+  display: inline-block;
+  margin: 0.2rem;
+}
+
+/* ── Stat bar ── */
+.stat-bar {
+  display: flex;
+  justify-content: center;
+  gap: 2.5rem;
+  flex-wrap: wrap;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 1.2rem 1rem;
+  margin-bottom: 3rem;
+}
+.stat-item {
+  text-align: center;
+}
+.stat-item .num {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #2e6da4;
+  line-height: 1;
+}
+.stat-item .lbl {
+  font-size: 0.78rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Section title ── */
+.section-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1a3a5c;
+  border-left: 4px solid #2e6da4;
+  padding-left: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+/* ── Class cards ── */
+.class-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+.class-card:hover {
+  box-shadow: 0 6px 20px rgba(46,109,164,0.13);
+  transform: translateY(-2px);
+}
+.class-card .class-number {
+  display: inline-block;
+  background: #2e6da4;
+  color: #fff;
+  border-radius: 6px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 0.6rem;
+}
+.class-card h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #1a3a5c;
+  margin-bottom: 0.4rem;
+}
+.class-card p {
+  font-size: 0.9rem;
+  color: #475569;
+  margin-bottom: 1rem;
+}
+.class-card .btn-part {
+  display: inline-block;
+  background: #eef4fb;
+  color: #2e6da4;
+  border: 1px solid #bdd5ee;
+  border-radius: 6px;
+  padding: 0.3rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin-right: 0.4rem;
+  margin-bottom: 0.3rem;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.class-card .btn-part:hover {
+  background: #2e6da4;
+  color: #fff;
+  text-decoration: none;
+}
+
+/* ── Tools section ── */
+.tool-chip {
+  display: inline-block;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 50px;
+  padding: 0.25rem 0.9rem;
+  font-size: 0.82rem;
+  color: #334155;
+  margin: 0.2rem;
+}
+
+/* ── Navbar tweak ── */
+.navbar {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.10);
+}
+
+/* ── Footer ── */
+.nav-footer {
+  background: #1a3a5c !important;
+  color: rgba(255,255,255,0.7) !important;
+}
+.nav-footer a { color: rgba(255,255,255,0.85) !important; }

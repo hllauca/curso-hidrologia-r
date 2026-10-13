@@ -1,0 +1,49 @@
+project:
+  type: website
+  output-dir: docs
+  render:
+    - "index.qmd"
+    - "clases.qmd"
+    - "datos.qmd"
+    - "about.qmd"
+  resources:
+    - "clases/*.html"
+    - "clases/*.Rmd"
+    - "custom.css"
+    - "data/**"
+
+website:
+  title: "Análisis Hidrológico de Cuencas con R"
+  description: "Curso-Taller de Análisis Hidrológico de Cuencas con R"
+
+  navbar:
+    background: "#1a3a5c"
+    foreground: light
+    logo-alt: "Análisis Hidrológico de Cuencas con R"
+    left:
+      - text: "Inicio"
+        href: index.qmd
+      - text: "Clases"
+        href: clases.qmd
+      - text: "Datos"
+        href: datos.qmd
+      - text: "Instructor"
+        href: about.qmd
+    right:
+      - icon: github
+        href: https://github.com/hllauca
+        aria-label: GitHub
+
+  page-footer:
+    background: "#1a3a5c"
+    left: "© H. Llauca — Análisis Hidrológico de Cuencas con R"
+    right:
+      - icon: github
+        href: https://github.com/hllauca
+
+format:
+  html:
+    theme: [flatly, custom.css]
+    toc: false
+    lang: es
+    smooth-scroll: true

@@ -1,0 +1,437 @@
+---
+title: "Curso-Taller: Análisis Hidrológico de Cuencas con R - 2026"
+subtitle: "Clase 2: Procesamiento de Datos Climáticos Grillados (parte 1)"
+author: "Harold Llauca"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    theme: cosmo
+    highlight: tango
+    
+knitr:
+  opts_chunk:
+    echo: true
+    warning: false
+    message: false
+---
+
+## 📦 1. Preparación del entorno de trabajo
+
+Se configura el entorno en R, definiendo el directorio de trabajo y cargando los paquetes necesarios para asegurar un flujo de trabajo ordenado y reproducible.
+
+### Directorio de trabajo
+
+```{r setup, include=FALSE}
+# Configuración inicial del documento
+knitr::opts_chunk$set(echo = TRUE)
+
+# Cambiar esta ruta según la ubicación del proyecto en su equipo.
+# Se recomienda usar rutas relativas para mayor portabilidad.
+
+knitr::opts_knit$set(
+  root.dir = "C:/Users/hllauca/Desktop/Analisis_Hidrologico_Cuencas_R_2026"
+  )
+```
+
+### Instalar y cargar paquetes
+
+```{r}
+# Establecer mirror de CRAN
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Lista de paquetes necesarios
+packages <- c(
+  "terra",          # manejo de datos raster y vectoriales
+  "sf",             # datos vectoriales espaciales
+  "exactextractr",  # extracción de valores por polígonos
+  "zoo",            # manejo de series de tiempo
+  "hydroTSM",       # agregación temporal (diario, mensual, anual)
+  "openxlsx",       # lectura y escritura de archivos Excel
+  "ggplot2",        # visualización de datos
+  "tidyr"           # transformación a formato largo
+)
+
+# Instalar paquetes si no están instalados
+for (pkg in packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+# Cargar paquetes
+invisible(lapply(packages, function(pkg) {
+  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+}))
+```
+
+## 🗺️ 2. Datos espaciales y visualización
+
+Se visualiza la zona de estudio para identificar la ubicación y extensión de las subcuencas.
+
+```{r}
+# Lectura de datos espaciales
+cat <- vect('./Data/SIG/subbasins.shp')  # subcuencas (polígonos)
+dem <- rast('./Data/SIG/dem.tif')        # elevación (raster)
+```
+
+```{r}
+# Exploración básica
+cat
+dem
+
+# Verificar sistema de coordenadas (muy importante)
+crs(cat)
+crs(dem)
+```
+
+```{r}
+# Visualización
+plot(dem,
+     main = "Subcuencas sobre el DEM",
+     col = terrain.colors(50))
+
+plot(cat, add = TRUE,
+     border = 'black',
+     lwd = 1)
+text(cat, cat$COMID)
+
+# Nota:
+# - vect() lee datos vectoriales (polígonos, líneas, puntos)
+# - rast() lee datos raster (grillas continuas)
+# - Ambas capas deben estar en el mismo sistema de coordenadas
+```
+
+## 🌧️ 3. Datos climáticos grillados
+
+### 3.1 Exploración de datos PISCOp v3
+
+PISCO (Peruvian Interpolated data of SENAMHI’s Climatological and Hydrological Observations) es un producto climático grillado que combina datos de estaciones con interpolación espacial, proporcionando información continua de precipitación a escala diaria y alta resolución (\~0.1°).
+
+Descarga archivo NetCDF en: <https://doi.org/10.6084/m9.figshare.32411886>.
+
+Nota: El archivo se encuentra en formato NetCDF, que permite almacenar datos multidimensionales organizados en dimensiones como tiempo, latitud y longitud.
+
+```{r}
+# Secuencia de fechas del producto (diario)
+dates <- seq(as.Date('1981-01-01'),
+             as.Date('2024-12-31'),
+             by = 'day')
+```
+
+```{r}
+# Leer archivo NetCDF como raster multicapa (cada capa = 1 día)
+pisco <- rast('./Data/PISCO/PISCOp_v3.nc')
+```
+
+```{r}
+# Explorar estructura básica del raster
+pisco
+nlyr(pisco)
+dim(pisco)
+
+# Verificar que el número de capas coincida con el número de fechas
+nlyr(pisco) == length(dates)
+```
+
+Explorar raster multicapa
+
+```{r}
+# Visualizar una capa específica (ejemplo: día 100)
+plot(pisco[[100]], alpha=0.9,
+     main = "Precipitación diaria (capa 100)")
+```
+
+Recortar el raster a la zona de estudio (subcuencas)
+
+```{r}
+# Se usa un factor 1.1 para ampliar ligeramente la extensión para evitar que el recorte quede muy ajustado al borde
+pisco_cat <- crop(pisco, 1.1 * ext(cat))
+
+# Comparar tamaño del raster antes y después del recorte
+dim(pisco)
+dim(pisco_cat)
+
+# Comparar extensiones
+ext(pisco)
+ext(pisco_cat)
+```
+
+```{r}
+# Visualizar una capa del raster recortado
+plot(pisco_cat[[100]], alpha=0.9,
+     main = "Precipitación recortada (capa 100)")
+
+# Superponer las subcuencas
+plot(cat, add = TRUE,
+     border = 'magenta',
+     lwd = 2)
+
+# Nota: crop() reduce el tamaño del raster para trabajar más rápido
+```
+
+## 🧮 4. Procesamiento espacio-temporal
+
+### 4.1 Extracción por subcuenca
+
+A partir del raster multicapa se calcula la precipitación media en cada subcuenca, obteniendo datos espacio-temporales.
+
+```{r}
+# Convertir a formato compatible y extraer promedio por polígono
+pr_cat <- t(exact_extract(pisco_cat,
+                          as(cat, 'Spatial'),
+                          fun = 'mean',
+                          weights ='area'))
+row.names(pr_cat) <- NULL
+```
+
+```{r}
+# Extraer ID de cada subcuenca (ej. COMID)
+cat_id <- cat$COMID
+
+# Asignar nombres de columnas a la matriz de precipitación
+colnames(pr_cat) <- cat_id
+
+# Nota:
+# Cada columna ahora representa una subcuenca identificada por su COMID
+```
+
+```{r}
+# Visualizar primeras filas
+head(pr_cat)
+dim(pr_cat)
+
+# Nota:
+# - exact_extract() calcula estadísticas del raster dentro de cada polígono
+# - fun = "mean" → promedio areal de precipitación
+# - El resultado se transpone (t) para tener:
+#   filas = tiempo (días)
+#   columnas = subcuencas
+```
+
+Organización en formato de serie temporales.
+
+head(dpr_cat)
+
+```{r}
+# Asociar los datos de precipitación con las fechas
+dpr_cat <- zoo(pr_cat, dates)
+
+# Ver primeras filas
+head(dpr_cat)
+
+# Visualizar series (todas las subcuencas)
+plot(dpr_cat,
+     type = 'h',
+     col = 'dodgerblue',
+     main = "Precipitación diaria por subcuenca (mm/d)")
+
+# Nota:
+# zoo permite manejar series temporales con fechas reales
+# filas = tiempo, columnas = subcuencas
+```
+
+```{r}
+# Convertir objeto zoo a data.frame
+df <- data.frame(
+  Date = index(dpr_cat),     # Fechas de la serie temporal
+  coredata(dpr_cat),         # Valores de precipitación por subcuenca
+  check.names = FALSE        # Mantener nombres originales de subcuencas
+)
+
+# Convertir a formato largo (una fila por fecha y subcuenca)
+df_long <- pivot_longer(
+  df,
+  cols = -Date,              # Todas las columnas excepto la fecha
+  names_to = "subbasin",     # Identificador de subcuenca
+  values_to = "precip"       # Valores de precipitación
+)
+
+# Obtener valor máximo global para usar una misma escala en todos los paneles
+ymax_global <- max(df_long$precip, na.rm = TRUE)
+
+# Construir gráfico con ggplot2
+plt <- ggplot(df_long, aes(x = Date, y = precip)) +
+
+  # Serie temporal como línea
+  geom_line(
+    color = "dodgerblue",    # Color de la serie
+    linewidth = 0.35         # Línea delgada para series largas
+  ) +
+
+  # Un panel por subcuenca
+  facet_wrap(
+    ~ subbasin,              # Variable de agrupación
+    scales = "fixed",        # Misma escala en todos los paneles
+    ncol = 3                 # Número de columnas en la grilla
+  ) +
+
+  # Limitar eje Y usando el máximo global
+  coord_cartesian(
+    ylim = c(0, ymax_global)
+  ) +
+
+  # Etiquetas del gráfico
+  labs(
+    title = "Precipitación diaria por subcuenca",
+    subtitle = "Series extraídas desde PISCO v3 (1981-2024)",
+    x = "Fecha",
+    y = "Precipitación (mm/día)"
+  ) +
+
+  # Tema base
+  theme_bw() +
+
+  # Ajustes estéticos
+  theme(
+    strip.text = element_text(face = "bold", size = 9),  # Títulos de cada subcuenca
+    axis.text.x = element_text(size = 7),                # Texto eje X
+    axis.text.y = element_text(size = 7),                # Texto eje Y
+    axis.title = element_text(size = 10),                # Títulos de ejes
+    plot.title = element_text(size = 13, face = "bold"), # Título principal
+    plot.subtitle = element_text(size = 10),             # Subtítulo
+    panel.grid.minor = element_blank(),                  # Quitar grilla menor
+    legend.position = "none"                             # Sin leyenda
+  )
+
+# Mostrar gráfico
+plt
+```
+
+Agregación de datos diarios a mensuales
+
+```{r}
+# Convertir precipitación diaria a mensual (acumulado)
+mpr_cat <- daily2monthly(dpr_cat, FUN = 'sum')
+
+# Visualizar series mensuales
+plot(mpr_cat,
+     type = 'h',
+     col = 'dodgerblue',
+     main = "Precipitación mensual acumulada (mm/mes)")
+
+# Nota:
+# FUN = "sum" se usa porque la precipitación es acumulativa
+# (a diferencia de temperatura, donde se usaría "mean")
+```
+
+Agregación de datos mensuales a anuales
+
+```{r}
+# Convertir precipitación mensual a anual (acumulado)
+ypr_cat <- monthly2annual(mpr_cat, FUN = 'sum')
+
+# Visualizar series anuales
+plot(ypr_cat,
+     type = 'h',
+     col = 'dodgerblue',
+     main = "Precipitación anual acumulada (mm/año)")
+
+# Nota:
+# Se mantiene FUN = "sum" porque la precipitación sigue siendo acumulativa
+# El resultado representa el total de lluvia por año en cada subcuenca
+```
+
+```{r}
+# Exportar datos en formato xlsx
+write.xlsx(x = list(
+            Diario = data.frame(Fecha = index(dpr_cat), coredata(dpr_cat)),
+            Mensual = data.frame(Fecha = index(mpr_cat), coredata(mpr_cat)),
+            Anual = data.frame(Fecha = index(ypr_cat), coredata(ypr_cat))
+            ),
+           rowNames = FALSE,
+           file = './Modules/Clase_2/outputs/precip_pisco_subcuencas.xlsx')
+```
+
+### 4.1 Extracción por estación
+
+```{r}
+# Definir coordenadas (longitud, latitud)
+xy <- data.frame(
+  x = c(-75.5, -75.2),
+  y = c(-13.6, -13.1)
+)
+
+# Convertir a objeto espacial (puntos)
+pts <- vect(xy,
+            geom = c("x", "y"),
+            crs = "EPSG:4326")
+
+plot(cat)
+plot(pts, col='red', add=TRUE)
+```
+
+```{r}
+# Extraer valores del raster en esos puntos
+pr_pts <- t(terra::extract(pisco_cat, pts))
+rownames(pr_pts) <- NULL
+
+# Nota:
+# - Cada punto obtiene una serie temporal completa del raster
+# - El resultado se transpone para tener:
+#   filas = tiempo
+#   columnas = puntos
+```
+
+```{r}
+# Asociar los datos de precipitación con las fechas
+dpr_pts <- zoo(pr_pts, dates)
+
+# Ver primeras filas
+head(dpr_pts)
+
+# Visualizar series (todas las subcuencas)
+plot(dpr_pts,
+     type = 'h',
+     col = 'dodgerblue',
+     main = "Precipitación diaria por estación (mm/d)")
+
+# Nota:
+# zoo permite manejar series temporales con fechas reales
+# filas = tiempo, columnas = subcuencas
+```
+
+```{r}
+# Convertir precipitación diaria a mensual (acumulado)
+mpr_pts <- daily2monthly(dpr_pts, FUN = 'sum')
+
+# Visualizar series mensuales
+plot(mpr_pts,
+     type = 'h',
+     col = 'dodgerblue',
+     main = "Precipitación mensual acumulada (mm/mes)")
+
+# Nota:
+# FUN = "sum" se usa porque la precipitación es acumulativa
+# (a diferencia de temperatura, donde se usaría "mean")
+```
+
+```{r}
+# Convertir precipitación mensual a anual (acumulado)
+ypr_pts <- monthly2annual(mpr_pts, FUN = 'sum')
+
+# Visualizar series anuales
+plot(ypr_pts,
+     type = 'h',
+     col = 'dodgerblue',
+     main = "Precipitación anual acumulada (mm/año)")
+
+# Nota:
+# Se mantiene FUN = "sum" porque la precipitación sigue siendo acumulativa
+# El resultado representa el total de lluvia por año en cada subcuenca
+```
+
+```{r}
+# Exportar datos en formato xlsx
+write.xlsx(x = list(
+            Diario = data.frame(Fecha = index(dpr_pts), coredata(dpr_pts)),
+            Mensual = data.frame(Fecha = index(mpr_pts), coredata(mpr_pts)),
+            Anual = data.frame(Fecha = index(ypr_pts), coredata(ypr_pts))
+            ),
+           rowNames = FALSE,
+           file = './Modules/Clase_2/outputs/precip_pisco_estaciones.xlsx')
+```

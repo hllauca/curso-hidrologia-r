@@ -1,0 +1,715 @@
+---
+title: "Curso-Taller: Análisis Hidrológico de Cuencas con R - 2026"
+subtitle: "Clase 3: Modelación hidrológica conceptual con GR4J (parte 2)"
+author: "Harold Llauca"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    theme: cosmo
+    highlight: tango
+    
+knitr:
+  opts_chunk:
+    echo: true
+    warning: false
+    message: false
+---
+
+# 📦 Preparación del entorno de trabajo
+
+Se configura el entorno en R, definiendo el directorio de trabajo y cargando los paquetes necesarios para asegurar un flujo de trabajo ordenado y reproducible.
+
+### Directorio de trabajo
+
+```{r setup, include=FALSE}
+# Configuración inicial del documento
+knitr::opts_chunk$set(echo = TRUE)
+
+# Cambiar esta ruta según la ubicación del proyecto en su equipo.
+# Se recomienda usar rutas relativas para mayor portabilidad.
+
+knitr::opts_knit$set(
+  root.dir = "C:/Users/hllauca/Desktop/Analisis_Hidrologico_Cuencas_R_2026"
+  )
+```
+
+## 📦 Instalación y carga de paquetes
+
+```{r}
+# Establecer mirror de CRAN
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Lista de paquetes necesarios
+packages <- c(
+  "openxlsx",  # lectura de archivos Excel (.xlsx)
+  "zoo",       # manejo de series temporales
+  "dplyr",     # manipulación de datos (data frames)
+  "terra",     # manejo de datos geoespaciales (raster y vector)
+  "airGR",     # implementación de modelos hidrológicos tipo GR (GR4J, GR5J, etc.)
+  "rtop",      # modelación hidrológica regional (transferencia a cuencas no aforadas)
+  "hydroGOF"   # métricas de evaluación de desempeño hidrológico (NSE, KGE, RMSE, etc.)
+)
+
+# Instalar paquetes si no están instalados
+for (pkg in packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+# Cargar paquetes
+invisible(lapply(packages, function(pkg) {
+  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+}))
+```
+
+# ☁️ Cargar datos de entrada
+
+En esta sección se cargan los datos de entrada previamente generados, los cuales contienen las series temporales de precipitación, evapotranspiración potencial y caudal observado. Estos datos serán utilizados para la implementación del modelo hidrológico GR4J.
+
+```{r}
+#-----------------------------------------------------------
+# Cargar datos de entrada para el modelo GR4J
+#-----------------------------------------------------------
+
+# Leer archivo RDS con los datos de entrada
+Inputs <- readRDS('./Modules/Clase_3/inputs/model_inputs_lumped.rds')
+
+# Visualizar las primeras filas
+head(Inputs)
+```
+
+```{r}
+#-----------------------------------------------------------
+# Cálculo del área de la cuenca
+#-----------------------------------------------------------
+
+# Cargar shapefile de la cuenca
+cat <- vect('./Data/SIG/basin.shp')  # Sistema de referencia: WGS84
+
+# Calcular el área de la cuenca en km2
+area <- terra::expanse(cat, unit = 'km')
+
+# Mostrar resultado
+area
+```
+
+# ☁️ Configuración del modelo
+
+Se define una función auxiliar para evaluar el desempeño del modelo GR4J. Esta función compara los caudales simulados y observados, calcula métricas hidrológicas de desempeño y, opcionalmente, genera un hidrograma comparativo entre ambas series. También permite excluir el periodo de calentamiento del modelo (warm-up) del cálculo de las métricas.
+
+```{r}
+#-----------------------------------------------------------
+# Función auxiliar para evaluar resultados del modelo GR4J
+#-----------------------------------------------------------
+
+gr4j_metrics <- function(flow_sim,
+                         flow_obs,
+                         time_sim,
+                         warmup_period = 0,
+                         title = "Simulación con el modelo GR4J",
+                         plot = TRUE) {
+  
+  # Verificar que las series tengan la misma longitud
+  stopifnot(
+    length(flow_sim) == length(flow_obs),
+    length(flow_obs) == length(time_sim)
+  )
+  
+  # Identificar datos posteriores al periodo de warm-up
+  idwup <- seq_along(flow_sim) > warmup_period
+  
+  # Calcular métricas de desempeño hidrológico
+  gof <- round(data.frame(
+    KGE    = hydroGOF::KGE(flow_obs[idwup], flow_sim[idwup]),
+    NSE    = hydroGOF::NSE(flow_obs[idwup], flow_sim[idwup]),
+    logNSE = hydroGOF::NSE(
+      flow_obs[idwup],
+      flow_sim[idwup],
+      fun = log,
+      epsilon.type = "Pushpalatha2012"
+    ),
+    RMSE  = hydroGOF::rmse(flow_obs[idwup], flow_sim[idwup]),
+    PBIAS = hydroGOF::pbias(flow_obs[idwup], flow_sim[idwup])
+  ), 2)
+  
+  # Retornar solo métricas si no se desea graficar
+  if (!plot) return(gof)
+  
+  # Configuración gráfica base
+  par(
+    mfrow = c(1, 1),
+    mar = c(3, 3, 2, 1),
+    mgp = c(1.5, 0.2, 0),
+    cex = 0.7,
+    cex.axis = 0.8,
+    tck = -0.01
+  )
+  
+  # Definir límites del eje Y
+  ylim_vals <- c(0, 1.1 * max(flow_obs, flow_sim, na.rm = TRUE))
+  
+  # Graficar caudal observado
+  plot(
+    time_sim,
+    flow_obs,
+    col = "black",
+    type = "p",
+    lwd = 1,
+    xlab = "Tiempo [días]",
+    ylab = expression("Caudal medio diario [m"^3*"/s]"),
+    main = title,
+    ylim = ylim_vals
+  )
+  
+  # Agregar caudal simulado
+  lines(
+    time_sim,
+    flow_sim,
+    col = "magenta",
+    lwd = 1
+  )
+  
+  # Mostrar límite del periodo de warm-up
+  if (warmup_period > 0 && warmup_period < length(time_sim)) {
+    abline(
+      v = time_sim[warmup_period],
+      col = "red",
+      lty = 2,
+      lwd = 1
+    )
+    
+    mtext(
+      "Calentamiento",
+      side = 2,
+      line = -2,
+      adj = 0.75,
+      col = "red",
+      cex = 0.7,
+    )
+  }
+  
+  # Agregar leyenda
+  legend(
+    "topleft",
+    legend = c("Observado", "Simulado"),
+    col = c("black", "magenta"),
+    pch = c(16, NA),
+    lty = c(NA, 1),
+    lwd = c(NA, 1),
+    bty = "n"
+  )
+  
+  # Agregar métricas en la parte superior del gráfico
+  for (i in seq_along(gof)) {
+    mtext(
+      bquote(.(names(gof)[i]) == .(gof[[i]])),
+      side = 3,
+      line = -1 - i,
+      adj = 0.98,
+      cex = 0.7
+    )
+  }
+  
+  # Retornar métricas
+  return(gof)
+}
+```
+
+El modelo GR4J posee cuatro parámetros principales que controlan el almacenamiento, intercambio y transferencia del agua dentro de la cuenca. Antes de la calibración, se definen los rangos mínimos y máximos permitidos para cada parámetro.
+
+```{r}
+#-----------------------------------------------------------
+# Definir rangos de parámetros del modelo GR4J
+#-----------------------------------------------------------
+
+# Nombres de los parámetros del modelo GR4J
+par_names <- c("X1", "X2", "X3", "X4")
+
+# Límites inferiores de los parámetros
+lower <- c(1, -10, 1, 0.5)
+
+# Límites superiores de los parámetros
+upper <- c(1500, 5, 500, 4)
+
+# Asignar nombres a los vectores de límites
+names(lower) <- par_names
+names(upper) <- par_names
+
+# Mostrar límites inferiores y superiores
+print(lower)
+print(upper)
+```
+
+Se definen los periodos de calibración y validación del modelo. El periodo de calibración se utiliza para estimar los parámetros óptimos, mientras que el periodo de validación permite evaluar la capacidad del modelo para reproducir caudales en un periodo independiente. Además, se considera un año inicial como periodo de calentamiento (warm-up) para reducir el efecto de las condiciones iniciales del modelo.
+
+```{r}
+#-----------------------------------------------------------
+# Definir periodos de calibración, validación y warm-up
+#-----------------------------------------------------------
+
+# Periodo de calibración
+ini_cal <- as.Date("1981-01-01")
+end_cal <- as.Date("2004-12-31")
+
+# Índices del periodo de calibración
+idx <- which(as.Date(Inputs$DatesR) == ini_cal):
+       which(as.Date(Inputs$DatesR) == end_cal)
+
+# Periodo de warm-up dentro de la calibración
+wup <- 1:365
+
+# Periodo de validación
+ini_val <- as.Date("2005-01-01")
+end_val <- as.Date("2020-12-31")
+
+# Índices del periodo de validación
+idy <- which(as.Date(Inputs$DatesR) == ini_val):
+       which(as.Date(Inputs$DatesR) == end_val)
+```
+
+Finalmente, se grafica el hidrograma observado y se indican los periodos utilizados para el calentamiento, calibración y validación del modelo. Esta figura permite verificar visualmente que los periodos han sido correctamente definidos.
+
+```{r}
+#-----------------------------------------------------------
+# Visualizar periodos de calibración y validación
+#-----------------------------------------------------------
+
+# Configuración gráfica
+par(
+  mfrow = c(1, 1),
+  mar = c(3, 3, 2, 1),
+  mgp = c(1.5, 0.2, 0),
+  cex = 0.7,
+  cex.axis = 0.8,
+  tck = -0.01
+)
+
+# Graficar caudal observado convertido de mm/d a m3/s
+plot(
+  Inputs$DatesR,
+  Inputs$Q * area / 86.4,
+  col = "black",
+  type = "p",
+  cex = 0.8,
+  lwd = 1,
+  xlab = "Tiempo [días]",
+  ylab = expression("Caudal medio diario [m"^3*"/s]"),
+  main = "Hidrograma observado y periodos de calibración-validación"
+)
+
+# Línea que marca el final del warm-up
+abline(
+  v = as.POSIXct(ini_cal + length(wup)),
+  col = "red",
+  lty = 2,
+  lwd = 1
+)
+
+# Línea que marca el inicio de la validación
+abline(
+  v = as.POSIXct(ini_val),
+  col = "red",
+  lty = 2,
+  lwd = 1
+)
+
+# Etiquetas de los periodos
+mtext(
+  "Calentamiento",
+  side = 2,
+  line = -1.5,
+  adj = 0.50,
+  col = "red",
+  cex=0.8
+)
+
+mtext(
+  "Calibración",
+  side = 3,
+  line = -2,
+  adj = 0.35,
+  col = "red",
+  cex=0.8
+)
+
+mtext(
+  "Validación",
+  side = 3,
+  line = -2,
+  adj = 0.85,
+  col = "red",
+  cex=0.8
+)
+```
+
+# 🖥️ Calibración del modelo
+
+En esta sección se presentan tres enfoques de calibración del modelo GR4J: una calibración manual y dos automáticas (método Michel y algoritmo SCE-UA). El objetivo es comparar sus resultados y comprender sus diferencias. Sin embargo, en aplicaciones reales no es estrictamente necesario utilizar los tres métodos; generalmente basta con una calibración automática bien configurada.
+
+Se recomienda iniciar con una calibración manual, ya que permite comprender la sensibilidad del modelo frente a sus parámetros. Por ejemplo: X1 controla la capacidad del reservorio de producción (almacenamiento de agua en el suelo), X2 representa el intercambio de agua subterránea, X3 define la capacidad del reservorio de enrutamiento (controlando la atenuación del caudal), y X4 está relacionado con el tiempo base del hidrograma (respuesta de la cuenca).
+
+Este entendimiento es clave para interpretar adecuadamente los resultados obtenidos durante la calibración automática.
+
+## Calibración manual (exploración de parámetros óptimos)
+
+En esta etapa se realiza una primera simulación del modelo GR4J mediante una selección manual de parámetros. Este ejercicio permite explorar la sensibilidad del modelo frente a diferentes combinaciones de parámetros y comprender cómo estos influyen en la respuesta hidrológica simulada
+
+```{r}
+#-----------------------------------------------------------
+# Calibración manual del modelo GR4J
+#-----------------------------------------------------------
+
+# Definir parámetros iniciales del modelo GR4J
+Best_param_1 <- c(
+  X1 = 1,     # capacidad del reservorio de producción [mm]
+  X2 = 1,     # coeficiente de intercambio subterráneo [mm/d]
+  X3 = 100,   # capacidad del reservorio de enrutamiento [mm]
+  X4 = 1      # tiempo base del hidrograma unitario [días]
+)
+
+# Crear objeto de entrada requerido por airGR
+InputsModel <- airGR::CreateInputsModel(
+  FUN_MOD = airGR::RunModel_GR4J,
+  DatesR  = as.POSIXlt(Inputs$DatesR),
+  Precip  = as.numeric(Inputs$P),
+  PotEvap = as.numeric(Inputs$E)
+)
+
+# Configurar periodo de simulación
+# idx extrae los datos del periodo de calibración
+RunOptions <- airGR::CreateRunOptions(
+  FUN_MOD       = airGR::RunModel_GR4J,
+  InputsModel   = InputsModel,
+  IndPeriod_Run = idx,
+  warnings      = FALSE,
+  verbose       = FALSE
+)
+
+# Ejecutar modelo GR4J
+Outputs <- airGR::RunModel(
+  Param       = Best_param_1,
+  InputsModel = InputsModel,
+  RunOptions  = RunOptions,
+  FUN_MOD     = airGR::RunModel_GR4J
+)
+
+# Evaluar desempeño del modelo
+# idx extrae los datos del periodo de calibración
+gof1 <- gr4j_metrics(
+  flow_sim      = Outputs$Qsim * area / 86.4,  # convertir mm/d a m3/s
+  flow_obs      = Inputs$Q[idx] * area / 86.4, # convertir mm/d a m3/s
+  time_sim      = Inputs$DatesR[idx],
+  warmup_period = 365,
+  title         = "Calibración manual del modelo GR4J",
+  plot          = TRUE
+)
+```
+
+## Calibración automática con airGR
+
+En esta sección se realiza la calibración automática del modelo GR4J utilizando el algoritmo de Michel, implementado en el paquete airGR. Este método permite estimar los parámetros óptimos del modelo a partir de una función objetivo, en este caso el coeficiente de eficiencia de Kling-Gupta (KGE), buscando maximizar el ajuste entre caudales simulados y observados.
+
+```{r}
+#-----------------------------------------------------------
+# Calibración automática del modelo GR4J (Método Michel)
+#-----------------------------------------------------------
+
+# parámetros iniciales (solo punto de partida del algoritmo);
+# no son finales y deben estar dentro de los rangos min–max
+parametros_ini <- c(
+  X1 = 10,    # reservorio de producción [mm]
+  X2 = 1,     # intercambio subterráneo [mm/d]
+  X3 = 250,   # reservorio de enrutamiento [mm]
+  X4 = 2      # tiempo base [días]
+)
+
+# Crear objeto de entrada para airGR
+InputsModel <- airGR::CreateInputsModel(
+  FUN_MOD = airGR::RunModel_GR4J,
+  DatesR  = as.POSIXlt(Inputs$DatesR),
+  Precip  = as.numeric(Inputs$P),
+  PotEvap = as.numeric(Inputs$E)
+)
+
+# Configurar ejecución del modelo
+RunOptions <- airGR::CreateRunOptions(
+  FUN_MOD          = airGR::RunModel_GR4J,
+  InputsModel      = InputsModel,
+  IndPeriod_Run    = idx,
+  IndPeriod_WarmUp = wup,
+  warnings         = FALSE,
+  verbose          = FALSE
+)
+
+# Definir función objetivo (KGE)
+# idx extrae los datos del periodo de calibración
+InputsCrit <- airGR::CreateInputsCrit(
+  FUN_CRIT   = airGR::ErrorCrit_KGE, # cambiar para definir FO
+  InputsModel = InputsModel,
+  RunOptions  = RunOptions,
+  Obs         = Inputs$Q[idx]
+)
+
+# Opciones de calibración (algoritmo de Michel)
+Calib_Options <- airGR::CreateCalibOptions(
+  FUN_MOD   = airGR::RunModel_GR4J,
+  FUN_CALIB = airGR::Calibration_Michel
+)
+
+# Ejecutar calibración automática
+OutputsCalib <- airGR::Calibration(
+  InputsModel  = InputsModel,
+  RunOptions   = RunOptions,
+  InputsCrit   = InputsCrit,
+  CalibOptions = Calib_Options,
+  FUN_MOD      = airGR::RunModel_GR4J,
+  FUN_CALIB    = airGR::Calibration_Michel,
+  FUN_CRIT     = airGR::ErrorCrit_KGE # cambiar para definir FO
+)
+
+# Extraer parámetros óptimos
+Best_param_2 <- OutputsCalib$ParamFinalR
+Best_param_2
+
+# Ejecutar modelo con parámetros calibrados
+Outputs <- airGR::RunModel(
+  Param       = Best_param_2,
+  InputsModel = InputsModel,
+  RunOptions  = RunOptions,
+  FUN_MOD     = airGR::RunModel_GR4J
+)
+
+# Evaluar desempeño del modelo
+# idx extrae los datos del periodo de calibración
+gof2 <- gr4j_metrics(
+  flow_sim      = Outputs$Qsim * area / 86.4, # mm/d → m3/s
+  flow_obs      = Inputs$Q[idx] * area / 86.4,
+  time_sim      = Inputs$DatesR[idx],
+  warmup_period = 365,
+  title         = "Calibración automática (airGR) del modelo GR4J",
+  plot          = TRUE
+)
+```
+
+## Calibración automática del modelo GR4J con algoritmo SCE-UA
+
+En esta sección se calibra el modelo GR4J mediante el algoritmo SCE-UA, una técnica de optimización global ampliamente utilizada en hidrología. A diferencia del método de calibración Michel implementado en airGR, en este enfoque se define explícitamente una función objetivo personalizada, que combina diferentes métricas de desempeño (como KGE, NSE y RMSE) mediante ponderaciones. Esto permite orientar la calibración hacia distintos aspectos del comportamiento hidrológico y obtener un conjunto de parámetros que reproduzca de manera más adecuada los caudales observados según los criterios definidos por el usuario.
+
+```{r}
+#-----------------------------------------------------------
+# Calibración automática del modelo GR4J (algoritmo SCE-UA)
+#-----------------------------------------------------------
+
+# parámetros iniciales (solo punto de partida del algoritmo);
+# no son finales y deben estar dentro de los rangos min–max
+parametros_ini <- c(
+  X1 = 10,    # reservorio de producción [mm]
+  X2 = 1,     # intercambio subterráneo [mm/d]
+  X3 = 250,   # reservorio de enrutamiento [mm]
+  X4 = 2      # tiempo base [días]
+)
+
+# Crear objeto de entrada para airGR
+InputsModel <- airGR::CreateInputsModel(
+  FUN_MOD = airGR::RunModel_GR4J,
+  DatesR  = as.POSIXlt(Inputs$DatesR),
+  Precip  = as.numeric(Inputs$P),
+  PotEvap = as.numeric(Inputs$E)
+)
+
+# Configurar ejecución del modelo
+RunOptions <- airGR::CreateRunOptions(
+  FUN_MOD          = airGR::RunModel_GR4J,
+  InputsModel      = InputsModel,
+  IndPeriod_Run    = idx,
+  IndPeriod_WarmUp = wup,
+  warnings         = FALSE,
+  verbose          = FALSE
+)
+
+# Definir función objetivo para la calibración
+OF <- function(param) {
+  
+  # Asignar nombres a los parámetros
+  names(param) <- names(parametros_ini)
+  
+  # Ejecutar modelo GR4J
+  Outputs <- airGR::RunModel(
+    Param       = param,
+    InputsModel = InputsModel,
+    RunOptions  = RunOptions,
+    FUN_MOD     = airGR::RunModel_GR4J
+  )
+  
+  # Extraer caudales simulados y observados sin periodo de warm-up
+  # idx extrae los datos del periodo de calibración
+  qsim <- Outputs$Qsim[-wup]
+  qobs <- Inputs$Q[idx][-wup]
+  
+# Calcular función objetivo
+# En este bloque se muestran distintas alternativas de función objetivo.
+# La idea es que SCE-UA minimice el valor de "fo".
+# Por ejemplo, si se usa 1 - KGE, el algoritmo buscará maximizar el KGE.
+
+# fo <- 1 - hydroGOF::KGE(qobs, qsim) 
+# usar KGE como función objetivo principal
+
+# fo <- 1 - hydroGOF::NSE(qobs, qsim) 
+# usar NSE como función objetivo principal
+
+# fo <- hydroGOF::rmse(qobs, qsim) 
+# usar RMSE como función objetivo principal
+
+# fo <- 0.6 * (1 - hydroGOF::KGE(qobs, qsim)) +
+#       0.4 * (1 - hydroGOF::NSE(qobs, qsim))
+# combinar KGE y NSE, dando mayor peso al KGE
+
+# fo <- 0.6 * (1 - hydroGOF::KGE(qobs, qsim)) +
+#       0.3 * (1 - hydroGOF::NSE(qobs, qsim)) +
+#       0.1 * hydroGOF::rmse(qobs, qsim)
+# combinar KGE, NSE y RMSE con pesos definidos por el usuario
+
+fo <- 0.6 * (1 - hydroGOF::KGE(qobs, qsim)) +
+      0.3 * (1 - hydroGOF::NSE(qobs, qsim)) +
+      0.1 * hydroGOF::rmse(qobs, qsim)
+  return(fo)
+}
+
+# Ejecutar calibración con SCE-UA
+calib <- rtop::sceua(
+  OFUN   = OF,                              # función objetivo a minimizar
+  pars   = as.numeric(parametros_ini),      # valores iniciales de los parámetros
+  lower  = as.numeric(lower),               # límites inferiores de los parámetros
+  upper  = as.numeric(upper),               # límites superiores de los parámetros
+  maxn   = 1000,                            # número máximo de evaluaciones (iteraciones)
+                                            # (recomendado mayor, e.g., 20000 para estudios finales)
+  kstop  = 10,                              # criterio de convergencia (número de iteraciones sin mejora significativa)
+  pcento = 0.1,                             # porcentaje de mejora mínima para continuar la optimización
+  ngs    = 8,                               # número de complejos (subpoblaciones)
+  npg    = 2 * length(parametros_ini) + 1,  # tamaño de cada complejo
+  nps    = length(parametros_ini) + 1,      # número de puntos en cada sub-complejo
+  nspl   = 2 * length(parametros_ini) + 1,  # número de pasos de evolución por complejo
+  mings  = 4                                # número mínimo de complejos activos
+)
+
+# Extraer parámetros calibrados
+Best_param_3 <- calib$par
+names(Best_param_3) <- names(parametros_ini)
+Best_param_3
+
+# Ejecutar modelo GR4J con parámetros calibrados
+Outputs <- airGR::RunModel(
+  Param       = Best_param_3,
+  InputsModel = InputsModel,
+  RunOptions  = RunOptions,
+  FUN_MOD     = airGR::RunModel_GR4J
+)
+
+# Evaluar desempeño del modelo
+gof3 <- gr4j_metrics(
+  flow_sim      = Outputs$Qsim * area / 86.4,  # mm/d → m3/s
+  flow_obs      = Inputs$Q[idx] * area / 86.4,
+  time_sim      = Inputs$DatesR[idx],
+  warmup_period = 365,
+  title         = "Calibración automática (SCE-UA) del modelo GR4J",
+  plot          = TRUE
+)
+```
+
+# Validación del modelo
+
+En esta sección se evalúa el desempeño del modelo GR4J utilizando un periodo independiente al de calibración. Este proceso, conocido como validación, permite verificar la capacidad del modelo para reproducir el comportamiento hidrológico bajo condiciones no utilizadas durante el ajuste de parámetros.
+
+Se utilizan los parámetros obtenidos en la calibración previa y se ejecuta el modelo sobre el periodo de validación definido.
+
+```{r}
+#-----------------------------------------------------------
+# Seleccionar parámetros calibrados de mejor desempeño
+#-----------------------------------------------------------
+Best_param <- Best_param_2  # proveniente de SCE-UA
+```
+
+```{r}
+#-----------------------------------------------------------
+# Validación del modelo GR4J
+#-----------------------------------------------------------
+
+# Crear objeto de entrada para airGR
+InputsModel <- airGR::CreateInputsModel(
+  FUN_MOD = airGR::RunModel_GR4J,
+  DatesR  = as.POSIXlt(Inputs$DatesR),
+  Precip  = as.numeric(Inputs$P),
+  PotEvap = as.numeric(Inputs$E)
+)
+
+# Configurar ejecución del modelo en periodo de validación
+# idy extrae los datos del periodo de validación
+RunOptions <- airGR::CreateRunOptions(
+  FUN_MOD       = airGR::RunModel_GR4J,
+  InputsModel   = InputsModel,
+  IndPeriod_Run = idy,        # periodo de validación
+  warnings      = FALSE,
+  verbose       = FALSE
+)
+
+# Ejecutar modelo GR4J con parámetros calibrados
+Outputs <- airGR::RunModel(
+  Param       = Best_param,
+  InputsModel = InputsModel,
+  RunOptions  = RunOptions,
+  FUN_MOD     = airGR::RunModel_GR4J
+)
+
+# Evaluar desempeño del modelo en validación
+# idy extrae los datos del periodo de validación
+gof_val <- gr4j_metrics(
+  flow_sim = Outputs$Qsim * area / 86.4,      # mm/d → m3/s
+  flow_obs = Inputs$Q[idy] * area / 86.4,
+  time_sim = Inputs$DatesR[idy],
+  title    = "Validación del modelo GR4J",
+  plot     = TRUE
+)
+```
+
+# Exportar resultados
+
+Finalmente, se guardan los resultados del modelo GR4J, ejecutado para el periodo completo de análisis.
+
+```{r}
+# Configuracion de los datos de entrada
+InputsModel <- airGR::CreateInputsModel(FUN_MOD=RunModel_GR4J,
+                                        DatesR=as.POSIXlt(Inputs$DatesR),
+                                        Precip=as.numeric(Inputs$P),
+                                        PotEvap=as.numeric(Inputs$E))
+
+# Configuracion de la corrida del modelo
+RunOptions <- airGR::CreateRunOptions(FUN_MOD=RunModel_GR4J,
+                               InputsModel=InputsModel, 
+                               IndPeriod_Run=seq_along(Inputs$DatesR), #1981-2020
+                               warnings=FALSE,
+                               verbose=FALSE)
+
+# Ejecutar el modelo
+Outputs    <- airGR::RunModel(Param=Best_param, 
+                       InputsModel=InputsModel, 
+                       RunOptions=RunOptions,
+                       FUN_MOD=RunModel_GR4J)
+```
+
+```{r}
+# Exportar resultados del modelo calibrado
+Outputs$Qobs   <- Inputs$Q
+Outputs$IdCal  <- idx
+Outputs$IdVal  <- idy
+Outputs$WarmUp <- wup
+Outputs$Param  <- Best_param
+Outputs$Area   <- area
+
+saveRDS(Outputs, "./Modules/Clase_3/outputs/model_outputs_lumped.rds")
+```

@@ -1,0 +1,266 @@
+---
+title: "Curso-Taller: Análisis Hidrológico de Cuencas con R - 2026"
+subtitle: "Clase 3: Modelación hidrológica conceptual con GR4J (parte 3)"
+author: "Harold Llauca"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    theme: cosmo
+    highlight: tango
+    
+knitr:
+  opts_chunk:
+    echo: true
+    warning: false
+    message: false
+---
+
+# 📦 Preparación del entorno de trabajo
+
+Se configura el entorno en R, definiendo el directorio de trabajo y cargando los paquetes necesarios para asegurar un flujo de trabajo ordenado y reproducible.
+
+```{r setup, include=FALSE}
+# Configuración inicial del documento
+knitr::opts_chunk$set(echo = TRUE)
+
+# Cambiar esta ruta según la ubicación del proyecto en su equipo.
+# Se recomienda usar rutas relativas para mayor portabilidad.
+
+knitr::opts_knit$set(
+  root.dir = "C:/Users/hllauca/Desktop/Analisis_Hidrologico_Cuencas_R_2026"
+  )
+```
+
+## Instalación y carga de paquetes
+
+```{r}
+# Establecer mirror de CRAN
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Lista de paquetes necesarios
+packages <- c(
+  "openxlsx",  # lectura y escritura de archivos Excel (.xlsx)
+  "zoo",       # manejo de series temporales
+  "dplyr",     # manipulación de datos (data frames)
+  "terra",     # manejo de datos geoespaciales (raster y vector)
+  "airGR",     # implementación de modelos hidrológicos tipo GR (GR4J, GR5J, etc.)
+  "rtop",      # optimización SCE-UA y herramientas de regionalización hidrológica
+  "hydroGOF",  # métricas de evaluación hidrológica (NSE, KGE, RMSE, PBIAS, etc.)
+  "hydroTSM",  # análisis, agregación y visualización de series temporales hidrológicas
+  "airGRiwrm", # modelación hidrológica integrada con modelos GR en redes de cuencas
+  "tidyr",     # transformación de datos entre formato ancho y largo
+  "ggplot2"    # elaboración de gráficos
+)
+
+# Instalar paquetes si no están instalados
+for (pkg in packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+# Cargar paquetes
+invisible(lapply(packages, function(pkg) {
+  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+}))
+```
+
+# ☁️ Cargar salidas del modelo calibrado-validado
+
+El objeto Outputs generado por el modelo GR4J contiene información tanto de las variables de entrada como de los procesos internos y las salidas del modelo. A continuación, se describen sus principales componentes:
+
+DatesR corresponde a las fechas de la simulación. Precip representa la precipitación total (mm/d) y PotEvap la evapotranspiración potencial (mm/d).
+
+Prod indica el almacenamiento en el reservorio de producción (mm). Pn es la precipitación neta que ingresa al sistema luego de considerar la evapotranspiración potencial. Ps corresponde a la fracción de Pn que alimenta el reservorio de producción. AE es la evapotranspiración real y Perc representa la percolación desde el reservorio de producción hacia el sistema de enrutamiento.
+
+PR es la precipitación efectiva que alimenta los hidrogramas unitarios del modelo.
+
+Q9 y Q1 corresponden a los flujos generados por los hidrogramas unitarios UH1 y UH2, asociados a la respuesta lenta (≈90%) y rápida (≈10%) del sistema, respectivamente.
+
+Rout representa el almacenamiento en el reservorio de enrutamiento, mientras que Exch es el intercambio de agua con el acuífero, que puede ser positivo o negativo. AExch1, AExch2 y AExch corresponden a los intercambios acumulados en las diferentes componentes del modelo.
+
+QR es el caudal proveniente del reservorio de enrutamiento (flujo base), y QD es el caudal directo o escorrentía rápida. La suma de ambos da como resultado Qsim, que es el caudal total simulado por el modelo (mm/d).
+
+RunOptions contiene la configuración utilizada para ejecutar el modelo, mientras que StateEnd guarda el estado final de los reservorios, útil como condición inicial para simulaciones posteriores.
+
+Finalmente, Qobs corresponde al caudal observado, IdCal e IdVal son los índices de los periodos de calibración y validación, respectivamente, WarmUp indica el periodo de calentamiento, Param contiene los parámetros calibrados del modelo (X1, X2, X3, X4), y Outputs\$area corresponde al área de la cuenca (km²).
+
+```{r}
+#-----------------------------------------------------------
+# Cargar salidas y extraer variables del modelo
+#-----------------------------------------------------------
+
+# Leer archivo RDS con las salidas del modelo
+Outputs <- readRDS('./Modules/Clase_3/outputs/model_outputs_lumped.rds')
+
+# Ver nombres de los elementos disponibles
+names(Outputs)
+
+# Extraer variables principales
+area    <- Outputs$Area      # área de la cuenca [km2]
+Qsim    <- Outputs$Qsim      # caudal simulado [mm/d]
+Qobs    <- Outputs$Qobs      # caudal observado [mm/d]
+Ind_cal <- Outputs$IdCal     # índices del periodo de calibración
+Ind_val <- Outputs$IdVal     # índices del periodo de validación
+wup     <- Outputs$WarmUp    # periodo de warm-up
+```
+
+# ⚙️Desempeño del modelo
+
+En esta sección se evalúa visualmente el desempeño del modelo GR4J utilizando las funciones gráficas de airGR. Estas figuras permiten analizar la coherencia de las variables simuladas, comparar los caudales observados y simulados, e identificar posibles sesgos en la estacionalidad, la distribución de caudales y la relación entre valores observados y simulados.
+
+Primero se visualizan las principales variables hidrológicas simuladas por el modelo, incluyendo la precipitación, la evapotranspiración real y los flujos generados. Esta figura permite revisar si la respuesta del modelo es coherente con los eventos de lluvia.
+
+```{r}
+#-----------------------------------------------------------
+# Visualizar precipitación, evapotranspiración real y caudales
+#-----------------------------------------------------------
+
+# Mostrar precipitación, evapotranspiración real y componentes de caudal
+plot(
+  Outputs,
+  which = c("Precip", "ActuEvap", "Flows")
+)
+```
+
+Luego se compara el caudal observado con el caudal simulado. Además, se muestra el error de simulación, lo cual permite identificar periodos donde el modelo sobreestima o subestima los caudales observados.
+
+```{r}
+#-----------------------------------------------------------
+# Comparar caudal observado, caudal simulado y error
+#-----------------------------------------------------------
+
+# Mostrar hidrograma observado/simulado y error de simulación
+plot(
+  Outputs,
+  Qobs  = Outputs$Qobs,
+  which = c("Flows", "Error")
+)
+```
+
+Finalmente, se evalúa el desempeño del modelo desde una perspectiva estadística. El régimen medio permite comparar la estacionalidad observada y simulada; la curva de duración muestra si el modelo reproduce adecuadamente la distribución de caudales; y el gráfico observado-simulado permite analizar la dispersión y el sesgo general de la simulación.
+
+```{r}
+#-----------------------------------------------------------
+# Diagnóstico estadístico del desempeño del modelo
+#-----------------------------------------------------------
+
+# Mostrar régimen medio, curva de duración y gráfico observado-simulado
+plot(
+  Outputs,
+  Qobs          = Outputs$Qobs,
+  which         = c("Regime", "CumFreq", "CorQQ"),
+  LayoutMat     = matrix(c(1, 2, 3, 3), ncol = 2),
+  LayoutWidths  = c(1.5, 1),
+  LayoutHeights = c(1, 1, 1)
+)
+```
+
+En esta sección se calculan estadísticas de desempeño del modelo GR4J para los periodos de calibración, validación y el periodo total. Para ello, se comparan los caudales simulados y observados, previamente convertidos a unidades de m³/s y excluyendo el periodo de calentamiento (warm-up). Finalmente, los resultados se exportan para su análisis y reporte.
+
+```{r}
+#-----------------------------------------------------------
+# Cálculo de métricas de desempeño del modelo
+#-----------------------------------------------------------
+
+stats <- list()
+
+#---------------------------
+# Calibración
+#---------------------------
+x <- Qsim[Ind_cal] * area / 86.4   # mm/d → m3/s
+y <- Qobs[Ind_cal] * area / 86.4
+
+x <- x[-wup]                       # remover warm-up
+y <- y[-wup]
+
+stats$calibracion <- gof(x, y)
+
+#---------------------------
+# Validación
+#---------------------------
+x <- Qsim[Ind_val] * area / 86.4
+y <- Qobs[Ind_val] * area / 86.4
+
+stats$validacion <- gof(x, y)
+
+#---------------------------
+# Periodo total
+#---------------------------
+x <- Qsim * area / 86.4
+y <- Qobs * area / 86.4
+
+x <- x[-wup]
+y <- y[-wup]
+
+stats$total <- gof(x, y)
+
+#---------------------------
+# Resumen
+#---------------------------
+stats <- do.call(cbind, stats)
+colnames(stats) <- c("Calibración", "Validación", "Total")
+
+print(stats)
+
+#-----------------------------------------------------------
+# Exportar resultados
+#-----------------------------------------------------------
+
+openxlsx::write.xlsx(
+  data.frame(Index = rownames(stats), stats),
+  "./Modules/Clase_3/outputs/model_gof_lumped.xlsx"
+)
+```
+
+Se presenta un gráfico resumen de las principales métricas de desempeño del modelo para los periodos de calibración, validación y total. Esto permite comparar rápidamente la eficiencia del modelo, el error medio y el sesgo en cada periodo evaluado.
+
+```{r}
+#-----------------------------------------------------------
+# Gráfico resumen de métricas de desempeño
+#-----------------------------------------------------------
+
+stats_plot <- stats %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("Metrica") %>%
+  dplyr::filter(Metrica %in% c("NSE", "KGE", "RMSE", "PBIAS %")) %>%
+  tidyr::pivot_longer(
+    cols = -Metrica,
+    names_to = "Periodo",
+    values_to = "Valor"
+  )
+
+# Ordenar métricas
+stats_plot$Metrica <- factor(
+  stats_plot$Metrica,
+  levels = c("KGE", "NSE", "RMSE", "PBIAS %")
+)
+
+# Ordenar periodos
+stats_plot$Periodo <- factor(
+  stats_plot$Periodo,
+  levels = c("Calibración", "Validación", "Total")
+)
+
+# Crear gráfico
+ggplot(stats_plot, aes(x = Periodo, y = Valor, fill = Periodo)) +
+  geom_col(width = 0.65, color = "black", linewidth = 0.2) +
+  facet_wrap(~ Metrica, scales = "free_y", ncol = 2) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = "Resumen de métricas de desempeño del modelo GR4J"
+  ) +
+  theme_bw(base_size = 10) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    strip.text = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```

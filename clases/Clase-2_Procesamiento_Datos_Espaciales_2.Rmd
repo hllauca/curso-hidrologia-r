@@ -1,0 +1,775 @@
+---
+title: "Curso-Taller: Análisis Hidrológico de Cuencas con R - 2026"
+subtitle: "Clase 2: Procesamiento de Datos Climáticos Grillados (parte 2)"
+author: "Harold Llauca"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    theme: cosmo
+    highlight: tango
+    code_download: true
+    
+knitr:
+  opts_chunk:
+    echo: true
+    warning: false
+    message: false
+---
+
+## 📦 1. Preparación del entorno de trabajo
+
+Se configura el entorno en R, definiendo el directorio de trabajo y cargando los paquetes necesarios para asegurar un flujo de trabajo ordenado y reproducible.
+
+```{r setup, include=FALSE}
+# Configuración inicial del documento
+knitr::opts_chunk$set(echo = TRUE)
+
+# Cambiar esta ruta según la ubicación del proyecto en su equipo.
+# Se recomienda usar rutas relativas para mayor portabilidad.
+
+knitr::opts_knit$set(
+  root.dir = "C:/Users/hllauca/Desktop/Analisis_Hidrologico_Cuencas_R_2026"
+  )
+```
+
+```{r}
+# Establecer mirror de CRAN
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Lista de paquetes necesarios
+packages <- c(
+  "terra",          # manejo de datos raster y vectoriales
+  "sf",             # datos vectoriales espaciales
+  "exactextractr",  # extracción de valores por polígonos
+  "zoo",            # manejo de series de tiempo
+  "hydroTSM",       # agregación temporal (diario, mensual, anual)
+  "hydroGOF",       # métricas de desempeño hidrológico
+  "hyfo",           # corrección de sesgo (bias correction)
+  "dplyr",          # manipulación de datos
+  "tidyr",          # transformación de datos (formato largo)
+  "ggplot2",        # visualización de datos
+  "ggspatial",      # elementos cartográficos en mapas
+  "tidyterra",      # integración de terra con ggplot2
+  "ggnewscale",     # múltiples escalas en gráficos
+  "openxlsx",       # lectura y escritura de archivos Excel
+  "getPass"         # manejo de credenciales (opcional)
+)
+
+# Instalar paquetes si no están instalados
+for (pkg in packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+# Cargar paquetes
+invisible(lapply(packages, function(pkg) {
+  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+}))
+```
+
+## 📁 2. Lectura de base de datos de estaciones pluviométricas
+
+```{r}
+# leer archivo de datos de precipitacion
+raw  <- read.xlsx('./Data/OBS/data_precip.xlsx',
+                  sheet=1, colNames=FALSE, detectDates = TRUE)
+
+# previsualizar datos
+head(raw, 10) 
+```
+
+```{r}
+# Extraer metadatos de estaciones
+abr  <- as.character(raw[2,-1])
+print(abr)
+
+cod  <- as.character(raw[3,-1])
+print(cod)
+
+lon  <- as.numeric(raw[4,-1])
+print(lon)
+
+lat  <- as.numeric(raw[5,-1])
+print(lat)
+
+npts <- length(abr)
+print(npts)
+```
+
+Mostrar mapa de estaciones pluviométricas en la cuenca.
+
+```{r}
+# crear objeto espacial de estaciones
+xy     <- data.frame(x=lon, y=lat)
+pts    <- vect(xy, geom=c("x","y"), crs="EPSG:4326")
+pts_sf <- st_as_sf(pts)
+pts_sf$nombre <- abr
+```
+
+```{r}
+# cargar objetos espacialesde la cuenca
+cat <- vect('./Data/SIG/subbasins.shp')
+riv <- vect('./Data/SIG/rivers.shp')
+dem <- rast('./Data/SIG/dem.tif')
+```
+
+```{r}
+# generar raster de relieve
+slp <- terra::terrain(dem, "slope", unit="radians")
+asp <- terra::terrain(dem, "aspect", unit="radians")
+hsd <- terra::shade(slp, asp, angle=45, direction=300, normalize=TRUE)
+dem.df <- as.data.frame(dem, xy=TRUE)
+names(dem.df)[3] <- "alt"
+hsd.df <- as.data.frame(hsd, xy=TRUE)
+```
+
+```{r}
+# crear mapa
+plt <- ggplot() +
+  geom_raster(data = hsd.df,
+              aes(x, y, fill = hillshade),
+              show.legend = FALSE) +
+  scale_fill_distiller(palette = "Greys") +
+  new_scale_fill() +
+  scale_x_continuous(n.breaks = 4) +
+  geom_raster(data = dem.df,
+              aes(x, y, fill = alt),
+              alpha = 0.7) +
+  scale_fill_gradientn(
+    colours = terrain.colors(100),
+    name = "msnm"
+  ) +
+  geom_sf(data = st_as_sf(cat), color = 'black', fill = NA) +
+  geom_sf(data = st_as_sf(riv), color = 'dodgerblue', fill = NA) +
+  geom_sf(data = pts_sf, color = 'red', size = 2) +
+  geom_text(data = pts_sf,
+            aes(x = st_coordinates(pts_sf)[,1],
+                y = st_coordinates(pts_sf)[,2],
+                label = abr),
+            color = "black", size = 3, hjust = -0.2) +   # ← aquí faltaba +
+
+  theme_bw() +
+  
+  guides(
+    fill = guide_colorbar(
+      barheight = unit(6, "cm"),
+      barwidth  = unit(0.4, "cm")
+    )) +
+  
+  theme(legend.position = "right") + 
+  
+  annotation_north_arrow(
+    location = "tl",
+    which_north = "true",
+    pad_x = unit(0.1, "in"),
+    pad_y = unit(0.1, "in"),
+    style = north_arrow_fancy_orienteering
+  ) +
+  
+  annotation_scale(location = "br", width_hint = 0.5) +
+  
+  labs(
+    title = 'Cuenca de estudio',
+    subtitle = 'Mapa de estaciones pluviométricas',
+    x = 'Longitud',
+    y = 'Latitud',
+    fill = 'msnm'
+  )
+
+# mostrar mapa
+print(plt)
+```
+
+Ahora extraemos los datos de precipitación diaria del archivo Excel de la base de datos.
+
+```{r}
+# Extraer fechas
+time <- as.Date(raw[-1:-6,1])
+head(time)
+
+# Extraer datos (notar que datos faltantes se muestran como -999.9)
+prec <- data.frame(sapply(raw[-1:-6,-1], 'as.numeric'))
+head(prec)
+```
+
+```{r}
+# Reconocer datos faltantes y crear series de tiempo
+prec[prec==-999.9] <- NA
+
+# Transformar datos a formato de serie de tiempo
+colnames(prec) <- abr
+prec_obs       <- zoo(prec, time)
+head(prec_obs)
+```
+
+Mostramos las series de tiempo de precipitación diaria observada en estaciones.
+
+```{r}
+# crear dataframe con datos
+df <- data.frame(
+  Date = index(prec_obs),
+  coredata(prec_obs),
+  check.names = FALSE
+)
+
+# transformar a formato largo
+df_long <- pivot_longer(
+  df,
+  cols = -Date,
+  names_to = "station",
+  values_to = "precip"
+)
+
+# eje Y global
+ymax_global <- max(df_long$precip, na.rm = TRUE)
+
+# crear figura de serie de tiempo
+plt <- ggplot(df_long, aes(Date, precip)) +
+        geom_line(color = "dodgerblue", linewidth = 0.4) +
+        facet_wrap(~ station, scales = "fixed", ncol = 3) +
+        coord_cartesian(ylim = c(0, ymax_global)) +
+        labs(
+          title = "Series de precipitación diaria (1981-2016)",
+          subtitle = "Estaciones pluviométricas en la cuenca",
+          x = "Tiempo",
+          y = "(mm/día)"
+        ) +
+        theme_bw() +
+        theme(
+          strip.text = element_text(face = "bold", size = 9),
+          axis.text.x = element_text(size = 7),
+          axis.text.y = element_text(size = 7),
+          axis.title = element_text(size = 10),
+          plot.title = element_text(size = 13, face = "bold"),
+          plot.subtitle = element_text(size = 10),
+          panel.grid.minor = element_blank(),
+          legend.position = "none"
+        )
+
+# mostrar figura
+plt
+```
+
+Se exploran los estadísticos descriptivos de las series observadas, incluyendo medidas de tendencia central, dispersión y extremos, con el fin de caracterizar su comportamiento y variabilidad.
+
+```{r}
+# estadisticos descriptivos
+smry(prec_obs)
+```
+
+Se revisa la disponibilidad de los datos observados, verificando la presencia de vacíos, la continuidad temporal y la calidad general de los registros.
+
+```{r}
+# revisar porcentaje de disponibilidad
+disp <- colSums(!is.na(prec_obs)) / nrow(prec_obs) * 100
+print(disp)
+
+# mostrar histograma de disp. de datos
+hist(disp,
+     col ='dodgerblue',
+     main = "Disponibilidad de datos de precip. (1981-2016)",
+     xlab = "Porcentaje de disponibilidad (%)",
+     ylab = 'Número de estaciones')
+```
+
+```{r}
+# revisar datos completos por año
+dwi(prec_obs)
+```
+
+Se acotan los datos al periodo de análisis 2000–2001, en función de la disponibilidad de información de CHIRPS (archivos descargados), con el objetivo de realizar una comparación consistente del sesgo entre las series.
+
+```{r}
+# extraer datos observados para el periodo de analisis
+prec_obs <- window(prec_obs, start='2000-01-01', end='2001-12-31')
+
+head(prec_obs)
+```
+
+## ☁️ 3. Lectura de datos grillados CHIRPS (v2 y v3)
+
+### 3.1 Datos CHIRPS v2
+
+Se leen los archivos en formato **NetCDF** descargados desde [https://www.chc.ucsb.edu/data/chirps](https://www.chc.ucsb.edu/data/chirps?utm_source=chatgpt.com). Cabe señalar que la versión **CHIRPS v2 será descontinuada en diciembre de 2026**, por lo que su uso debe considerarse con fines comparativos o de transición hacia versiones más recientes. Para la descarga y manejo de los datos no se utiliza el paquete de R **`chirps`**, debido a limitaciones de acceso a los servidores, optándose en su lugar por métodos directos de descarga.
+
+```{r}
+# lectura archivos netCDF chirps v2
+files <- list.files('./Data/CHIRPS/examples/v2',
+                    pattern = '*.nc',
+                    full.names = TRUE)
+head(files)
+```
+
+```{r}
+# leer archivos netcdf como raster multicapas
+dates_chirps <- seq(as.Date('2000-01-01'),
+                    as.Date('2001-12-31'),
+                    by='days')
+r <- rast(files)
+
+# mostrar metadatos del raster
+print(r)
+
+# mostrar como ejemplo el mapa raster para la capa 100
+plot(r[[100]], main = "CHIRPS v2 - capa 100")
+```
+
+```{r}
+# extraer series de tiempo para puntos de estaciones
+prec_chirps_v2 <- zoo(t(terra::extract(r, pts, ID = FALSE)), dates_chirps)
+colnames(prec_chirps_v2) <- abr
+head(prec_chirps_v2)
+```
+
+### 3.2 Datos CHIRPS v3 (mezclados con IMERG)
+
+Existen dos variantes de CHIRPS v3 para la generación del producto diario: una versión **“sat”**, que utiliza información satelital (como IMERG) para desagregar la precipitación pentadal, y una versión **“rnl”**, que emplea reanálisis (ERA5) con el mismo propósito. Ambas parten de una base pentadal común, pero difieren en la fuente utilizada para representar la variabilidad temporal diaria. Los datos se encuentran disponibles en: <https://www.chc.ucsb.edu/data/chirps3>.
+
+```{r}
+# lectura de datos chirps v3
+files <- list.files('./Data/CHIRPS/examples/v3',
+                    pattern = '*.tif$',
+                    full.names = TRUE)
+head(files)
+```
+
+```{r}
+# leer archivos netcdf como raster multicapas
+dates_chirps <- seq(as.Date('2000-01-01'),
+                    as.Date('2001-12-31'),
+                    by='days')
+r <- rast(files)
+
+# mostrar metadatos del archivo
+print(r)
+
+# mostrar mapa raster para la capa 100 como ejemplo
+x <- r[[100]]
+x[x == -9999] <- NA  # el tif tiene pixeles NA como -9999
+plot(x, main = "CHIRPS v3 - capa 100")
+```
+
+```{r}
+# extraer series de tiempo para puntos de estaciones
+prec_chirps_v3 <- zoo(t(terra::extract(r, pts, ID = FALSE)), dates_chirps)
+colnames(prec_chirps_v3) <- abr
+head(prec_chirps_v3)
+```
+
+## 🏞️ 4. Comparativo de datos observados vs CHIRPS (sin corrección)
+
+Evaluar comparativamente la precipitación diaria observada en estaciones pluviométricas frente a los datos de CHIRPS en sus distintas versiones, con el fin de analizar su capacidad para reproducir la variabilidad temporal, los extremos y el sesgo respecto a las observaciones.
+
+```{r}
+# crear dataframe con datos observados y chirps
+df <- data.frame(
+  Date = index(prec_obs),
+  Obs = coredata(prec_obs),
+  CHIRPS_v2 = coredata(prec_chirps_v2),
+  CHIRPS_v3 = coredata(prec_chirps_v3),
+  check.names = FALSE
+)
+
+# transformar a formato largo
+df_long <- df %>%
+  pivot_longer(
+    cols = -Date,
+    names_to = c("type", "station"),
+    names_sep = "\\.",
+    values_to = "precip"
+  ) %>%
+  mutate(
+    type = recode(
+      type,
+      "Obs" = "Observado",
+      "CHIRPS_v2" = "CHIRPS v2",
+      "CHIRPS_v3" = "CHIRPS v3"
+    )
+  ) %>%
+  filter(!is.na(precip))
+
+# ordenar estaciones para mostrar
+station_order <- colnames(prec_obs)
+df_long$station <- factor(df_long$station, levels = station_order)
+
+# crear figura comparativa de series de tiempo
+plt <- ggplot(df_long, aes(x = Date, y = precip,
+                           color = type, linetype = type)) +
+  geom_line(linewidth = 0.35) +
+  scale_color_manual(values = c(
+    "Observado" = "black",
+    "CHIRPS v2" = "dodgerblue",
+    "CHIRPS v3" = "red"
+  )) +
+  scale_linetype_manual(values = c(
+    "Observado" = "solid",
+    "CHIRPS v2" = "solid",
+    "CHIRPS v3" = "solid"
+  )) +
+facet_wrap(~ station, ncol = 3, scales = "free_y") + 
+  labs(
+    title = "Comparación de precipitación diaria por estación",
+    subtitle = "Observado vs CHIRPS v2 y CHIRPS v3",
+    x = "Fecha",
+    y = "Precipitación (mm/día)"
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(face = "bold", size = 9),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 7),
+    axis.title = element_text(size = 11),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10),
+    panel.grid.minor = element_blank(),
+    legend.position = "top",
+    legend.title = element_blank()
+  )
+
+# mostrar figura
+plt
+```
+
+Se calculan las métricas de desempeño **KGE, PBIAS y nRMSE** para cada conjunto de datos, con el fin de evaluar la capacidad de las series simuladas para reproducir las observaciones en términos de ajuste global, sesgo y error relativo.
+
+```{r}
+# Convertir a matrices (mismas dimensiones)
+obs  <- coredata(prec_obs)
+v2   <- coredata(prec_chirps_v2)
+v3   <- coredata(prec_chirps_v3)
+
+stations <- colnames(obs)
+
+# Inicializar resultados
+gof_raw <- data.frame(
+  station = stations,
+  
+  KGE_v2 = NA, PBIAS_v2 = NA, nRMSE_v2 = NA,
+  KGE_v3 = NA, PBIAS_v3 = NA, nRMSE_v3 = NA
+)
+
+# Calcular metricas de desempeño (KGE, PBIAS y nRMSE)
+for (i in seq_along(stations)) {
+  o  <- obs[, i]
+  s2 <- v2[, i]
+  s3 <- v3[, i]
+  
+  # Remover NA conjuntos
+  idx2 <- complete.cases(o, s2)
+  idx3 <- complete.cases(o, s3)
+  
+  # CHIRPS v2
+  gof_raw$KGE_v2[i]   <- suppressWarnings(KGE(sim = s2[idx2], obs = o[idx2]))
+  gof_raw$PBIAS_v2[i] <- suppressWarnings(pbias(sim = s2[idx2], obs = o[idx2]))
+  gof_raw$nRMSE_v2[i] <- suppressWarnings(nrmse(sim = s2[idx2], obs = o[idx2], norm = "sd"))
+  
+  # CHIRPS v3
+  gof_raw$KGE_v3[i]   <- suppressWarnings(KGE(sim = s3[idx3], obs = o[idx3]))
+  gof_raw$PBIAS_v3[i] <- suppressWarnings(pbias(sim = s3[idx3], obs = o[idx3]))
+  gof_raw$nRMSE_v3[i] <- suppressWarnings(nrmse(sim = s3[idx3], obs = o[idx3], norm = "sd"))
+}
+
+# mostrar tabla de resultados
+print(gof_raw)
+```
+
+```{r}
+# transformar resultados de desempeño a formato largo
+gof_long <- gof_raw %>%
+  pivot_longer(
+    cols = -station,
+    names_to = c("metric", "product"),
+    names_pattern = "(.*)_(v2|v3)",
+    values_to = "value"
+  ) %>%
+  mutate(
+    product = recode(product,
+                     "v2" = "CHIRPS v2",
+                     "v3" = "CHIRPS v3"),
+    metric = recode(metric,
+                    "PBIAS" = "PBIAS (%)",
+                    "nRMSE" = "nRMSE (%)")
+  )
+
+# crear figura de desempeño
+plt <- ggplot(gof_long, aes(x = station, y = value, fill = product)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  facet_wrap(~ metric, scales = "free_y", ncol = 3) +
+  labs(
+    title = "Métricas de desempeño por estación",
+    subtitle = "Comparación entre CHIRPS v2 y CHIRPS v3",
+    x = "Estación",
+    y = "Valor de la métrica",
+    fill = NULL
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(face = "bold", size = 10),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 7),
+    axis.text.y = element_text(size = 8),
+    axis.title = element_text(size = 11),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10),
+    panel.grid.minor = element_blank(),
+    legend.position = "top"
+  )
+
+# mostrar figura
+plt
+```
+
+## 🏞️ 5. Corrección del sesgo de datos CHIRPS respecto de observaciones
+
+Se aplica el método de **mapeo de cuantiles empíricos (EQM)** para la corrección del sesgo en los datos CHIRPS. Este método ajusta la **distribución acumulada empírica** de los datos simulados a la distribución de referencia observada, corrigiendo no solo el valor medio, sino también la **variabilidad y la frecuencia de ocurrencia** de los eventos. Al tratarse de una corrección distribucional, permite mejorar la representación de toda la gama de precipitaciones, incluyendo eventos extremos, garantizando una mejor correspondencia estadística entre las series modeladas y observadas.
+
+```{r}
+# Función para corregir CHIRPS usando EQM
+correct_eqm <- function(prec_sim, prec_obs, prThreshold = 0.1) {
+  
+  tim <- index(prec_obs)
+  obs <- coredata(prec_obs)
+  sim <- coredata(prec_sim)
+  
+  stations <- colnames(prec_obs)
+  
+  sim_bc <- sim
+  stations_no_bc <- c()
+  
+  for (i in seq_along(stations)) {
+    
+    obs_i <- obs[, i]
+    sim_i <- sim[, i]
+    
+    idx <- complete.cases(obs_i, sim_i)
+    
+    # Si no hay suficientes datos observados, no se corrige
+    if (sum(idx) < 30) {
+      stations_no_bc <- c(stations_no_bc, stations[i])
+      next
+    }
+    
+    obs_df <- data.frame(date = tim[idx], val = obs_i[idx])
+    sim_df <- data.frame(date = tim[idx], val = sim_i[idx])
+    
+    # Se corrige solo el periodo con datos coincidentes
+    sim_bc[idx, i] <- biasCorrect(
+      frc = sim_df,
+      hindcast = sim_df,
+      obs = obs_df,
+      method = "eqm",
+      preci = TRUE,
+      prThreshold = prThreshold,
+      extrapolate = "no"
+    )[, 2]
+  }
+  
+  sim_bc <- zoo(sim_bc, index(prec_sim))
+  colnames(sim_bc) <- colnames(prec_sim)
+  
+  return(list(
+    bc = sim_bc,
+    stations_no_bc = stations_no_bc
+  ))
+}
+```
+
+```{r}
+# Aplicar corrección a CHIRPS v2
+res_v2 <- correct_eqm(
+  prec_sim = prec_chirps_v2,
+  prec_obs = prec_obs
+)
+
+prec_chirps_v2_bc <- res_v2$bc
+
+head(prec_chirps_v2_bc)
+```
+
+```{r}
+# Aplicar corrección a CHIRPS v3
+res_v3 <- correct_eqm(
+  prec_sim = prec_chirps_v3,
+  prec_obs = prec_obs
+)
+
+prec_chirps_v3_bc <- res_v3$bc
+
+head(prec_chirps_v2_bc)
+```
+
+```{r}
+# creamos un dataframe con los datos
+df <- data.frame(
+  Date = index(prec_obs),
+  Obs = coredata(prec_obs),
+  CHIRPS_v2 = coredata(prec_chirps_v2_bc),
+  CHIRPS_v3 = coredata(prec_chirps_v3_bc),
+  check.names = FALSE
+)
+
+# transformamos el dataframe en formato largo
+df_long <- df %>%
+  pivot_longer(
+    cols = -Date,
+    names_to = c("type", "station"),
+    names_sep = "\\.",
+    values_to = "precip"
+  ) %>%
+  mutate(
+    type = recode(
+      type,
+      "Obs" = "Observado",
+      "CHIRPS_v2" = "CHIRPS v2",
+      "CHIRPS_v3" = "CHIRPS v3"
+    )
+  ) %>%
+  filter(!is.na(precip))
+
+# ordenamos en funcion de estaciones
+station_order <- colnames(prec_obs)
+df_long$station <- factor(df_long$station, levels = station_order)
+
+# crear figura comparativa
+plt <- ggplot(df_long, aes(x = Date, y = precip,
+                           color = type, linetype = type)) +
+  geom_line(linewidth = 0.35) +
+  scale_color_manual(values = c(
+    "Observado" = "black",
+    "CHIRPS v2" = "dodgerblue",
+    "CHIRPS v3" = "red"
+  )) +
+  scale_linetype_manual(values = c(
+    "Observado" = "solid",
+    "CHIRPS v2" = "solid",
+    "CHIRPS v3" = "solid"
+  )) +
+facet_wrap(~ station, ncol = 3, scales = "free_y") + 
+  labs(
+    title = "Comparación de precipitación diaria por estación",
+    subtitle = "Observado vs CHIRPS v2 (bc) y CHIRPS v3 (BC)",
+    x = "Fecha",
+    y = "Precipitación (mm/día)"
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(face = "bold", size = 9),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 7),
+    axis.title = element_text(size = 11),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10),
+    panel.grid.minor = element_blank(),
+    legend.position = "top",
+    legend.title = element_blank()
+  )
+
+#mostrar figura comparativa
+plt
+```
+
+Se recalculan las métricas de desempeño para las series corregidas, con el fin de evaluar la mejora en la representación de la variabilidad, el sesgo y el ajuste respecto a las observaciones.
+
+```{r}
+# Convertir a matrices (mismas dimensiones)
+obs  <- coredata(prec_obs)
+v2   <- coredata(prec_chirps_v2_bc)
+v3   <- coredata(prec_chirps_v3_bc)
+
+stations <- colnames(obs)
+
+# Inicializar resultados
+gof_bc <- data.frame(
+  station = stations,
+  
+  KGE_v2 = NA, PBIAS_v2 = NA, nRMSE_v2 = NA,
+  KGE_v3 = NA, PBIAS_v3 = NA, nRMSE_v3 = NA
+)
+
+# Calcular metricas de desempeño
+for (i in seq_along(stations)) {
+  o  <- obs[, i]
+  s2 <- v2[, i]
+  s3 <- v3[, i]
+  
+  # Remover NA conjuntos
+  idx2 <- complete.cases(o, s2)
+  idx3 <- complete.cases(o, s3)
+  
+  # CHIRPS v2
+  gof_bc$KGE_v2[i]   <- suppressWarnings(KGE(sim = s2[idx2], obs = o[idx2]))
+  gof_bc$PBIAS_v2[i] <- suppressWarnings(pbias(sim = s2[idx2], obs = o[idx2]))
+  gof_bc$nRMSE_v2[i] <- suppressWarnings(nrmse(sim = s2[idx2], obs = o[idx2], norm = "sd"))
+  
+  # CHIRPS v3
+  gof_bc$KGE_v3[i]   <- suppressWarnings(KGE(sim = s3[idx3], obs = o[idx3]))
+  gof_bc$PBIAS_v3[i] <- suppressWarnings(pbias(sim = s3[idx3], obs = o[idx3]))
+  gof_bc$nRMSE_v3[i] <- suppressWarnings(nrmse(sim = s3[idx3], obs = o[idx3], norm = "sd"))
+}
+
+# mostrar tabla de resultados
+print(gof_bc)
+```
+
+```{r}
+# transformar a formato largo
+gof_long <- gof_bc %>%
+  pivot_longer(
+    cols = -station,
+    names_to = c("metric", "product"),
+    names_pattern = "(.*)_(v2|v3)",
+    values_to = "value"
+  ) %>%
+  mutate(
+    product = recode(product,
+                     "v2" = "CHIRPS v2",
+                     "v3" = "CHIRPS v3"),
+    metric = recode(metric,
+                    "PBIAS" = "PBIAS (%)",
+                    "nRMSE" = "nRMSE (%)")
+  )
+
+# crear figura comparativa del desempeño
+plt <- ggplot(gof_long, aes(x = station, y = value, fill = product)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  facet_wrap(~ metric, scales = "free_y", ncol = 3) +
+  labs(
+    title = "Métricas de desempeño por estación",
+    subtitle = "Comparación entre CHIRPS v2 (bc) y CHIRPS v3 (bc)",
+    x = "Estación",
+    y = "Valor de la métrica",
+    fill = NULL
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(face = "bold", size = 10),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 7),
+    axis.text.y = element_text(size = 8),
+    axis.title = element_text(size = 11),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10),
+    panel.grid.minor = element_blank(),
+    legend.position = "top"
+  )
+
+# mostrar figura
+plt
+```
+
+Se exportan las series de datos CHIRPS v2 y v3 corregidas por sesgo en formato Excel para cada estación, facilitando su análisis, visualización y uso en aplicaciones posteriores.
+
+```{r}
+# Exportar datos
+write.xlsx(list(
+    Observado = data.frame(Fecha=index(prec_obs), coredata(prec_obs)),
+    CHIRPS_v2_bc = data.frame(Fecha=index(prec_chirps_v2_bc), coredata(prec_chirps_v2_bc)),
+    CHIRPS_v3_bc = data.frame(Fecha=index(prec_chirps_v3_bc), coredata(prec_chirps_v3_bc))
+    ),
+    './Modules/Clase_2/outputs/precip_estaciones_chirps_bc.xlsx',
+    rowNames= FALSE)
+```
